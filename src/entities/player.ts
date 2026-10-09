@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { CAMERA } from '../engine/camera';
+import { MeshBasicNodeMaterial } from 'three/webgpu';
 import type { Game } from '../game';
 import { Hero, idlePose, type HeroPose, type MoveMode } from './hero';
 import { angleDiff, clamp, damp } from '../util/math';
@@ -86,7 +88,7 @@ export class Player {
   private prevYaw = 0;
   private pose: HeroPose = idlePose();
   private blob: THREE.Mesh;
-  private blobMat: THREE.MeshBasicMaterial;
+  private blobMat: MeshBasicNodeMaterial;
   speed = 0;
   /** true during the frame the hero left the ground by jumping */
   justJumped = false;
@@ -102,7 +104,7 @@ export class Player {
   constructor(skin: 'resonant' | 'verdant' | 'void' = 'resonant') {
     this.hero = new Hero(skin);
     this.group = this.hero.root;
-    this.blobMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35, depthWrite: false });
+    this.blobMat = new MeshBasicNodeMaterial({ color: 0x000000, transparent: true, opacity: 0.22, depthWrite: false });
     this.blob = new THREE.Mesh(new THREE.CircleGeometry(0.55, 16).rotateX(-Math.PI / 2), this.blobMat);
     this.blob.renderOrder = 1;
     this.tether = new Tether(new THREE.Color(0xc2ff7a).multiplyScalar(1.4));
@@ -116,7 +118,7 @@ export class Player {
     return this.y + (this.mode === 'flight' ? 0.5 : 1.05);
   }
   get cameraTarget() {
-    return _v.set(this.x, this.y + (this.mode === 'flight' ? 1.2 : 1.55), this.z);
+    return _v.set(this.x, this.y + (this.mode === 'flight' ? 1.2 : CAMERA.height), this.z);
   }
 
   reset(x: number, y: number, z: number, hp: number) {

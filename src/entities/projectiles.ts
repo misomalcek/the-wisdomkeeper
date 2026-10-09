@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { glowBasic } from '../engine/materials';
 import type { Game } from '../game';
 import type { Enemy } from './enemies';
 
@@ -41,7 +42,7 @@ export class Projectiles {
 
   constructor() {
     const mk = (geo: THREE.BufferGeometry, max: number) => {
-      const m = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial(), max);
+      const m = new THREE.InstancedMesh(geo, glowBasic(), max);
       m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(max * 3), 3);
       m.count = 0;
       m.frustumCulled = false;

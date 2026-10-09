@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { MeshBasicNodeMaterial } from 'three/webgpu';
+import { uniform, positionGeometry, max, normalize, cross, select, abs, vec3, sin, cos, mix, float, varying } from 'three/tsl';
+import { glow, type N } from '../engine/materials';
 import type { TetherAnchor } from '../world/traversal';
 
 const SEG = 48;
@@ -19,52 +22,41 @@ export class Tether {
   /** 0 → slack/wiggly, 1 → taut */
   private taut = 0;
   private shoot = 0;
-  private u: Record<string, THREE.IUniform>;
+  private u: Record<'uA' | 'uB' | 'uTime' | 'uSlack' | 'uReach' | 'uColor', N>;
   private from = new THREE.Vector3();
 
   constructor(color: THREE.Color) {
     const geo = new THREE.CylinderGeometry(1, 1, 1, 6, SEG, true).translate(0, 0.5, 0);
     this.u = {
-      uA: { value: new THREE.Vector3() },
-      uB: { value: new THREE.Vector3() },
-      uTime: { value: 0 },
-      uSlack: { value: 1 },
-      uReach: { value: 0 },
-      uColor: { value: color.clone() },
+      uA: uniform(new THREE.Vector3()),
+      uB: uniform(new THREE.Vector3()),
+      uTime: uniform(0),
+      uSlack: uniform(1),
+      uReach: uniform(0),
+      uColor: uniform(color.clone()),
     };
-    const mat = new THREE.ShaderMaterial({
-      uniforms: this.u,
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      side: THREE.DoubleSide,
-      vertexShader: /* glsl */ `
-        uniform vec3 uA, uB; uniform float uTime, uSlack, uReach;
-        varying float vT; varying float vEdge;
-        void main(){
-          float t = position.y * uReach;
-          vec3 d = uB - uA;
-          float L = length(d);
-          vec3 f = d / max(L, 1e-3);
-          vec3 s = normalize(cross(f, abs(f.y) > 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0)));
-          vec3 u = cross(s, f);
-          float env = sin(3.14159 * t);
-          // sag under gravity + travelling wiggle while slack
-          vec3 p = uA + d * t + vec3(0.0, -1.0, 0.0) * env * L * 0.08 * uSlack;
-          p += (s * sin(t * 22.0 - uTime * 18.0) + u * cos(t * 17.0 - uTime * 14.0)) * env * 0.35 * uSlack;
-          float r = mix(0.07, 0.035, t) * (1.0 + 0.4 * sin(t * 60.0 - uTime * 30.0));
-          p += (s * position.x + u * position.z) * r;
-          vT = t; vEdge = abs(position.x);
-          gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
-        }`,
-      fragmentShader: /* glsl */ `
-        uniform vec3 uColor; uniform float uTime;
-        varying float vT; varying float vEdge;
-        void main(){
-          float pulse = 0.55 + 0.45 * sin(vT * 40.0 - uTime * 26.0);
-          gl_FragColor = vec4(uColor * (1.2 + pulse * 1.6), 0.85);
-        }`,
-    });
+    const u = this.u;
+    const g: N = positionGeometry;
+    const t = g.y.mul(u.uReach);
+    const d = u.uB.sub(u.uA);
+    const L = d.length();
+    const f = d.div(max(L, 1e-3));
+    const s = normalize(cross(f, select(abs(f.y).greaterThan(0.9), vec3(1, 0, 0), vec3(0, 1, 0))));
+    const up = cross(s, f);
+    const env = sin(t.mul(Math.PI));
+    // sag under gravity + travelling wiggle while slack
+    const wig = s.mul(sin(t.mul(22).sub(u.uTime.mul(18)))).add(up.mul(cos(t.mul(17).sub(u.uTime.mul(14)))));
+    const r = mix(float(0.07), float(0.035), t).mul(sin(t.mul(60).sub(u.uTime.mul(30))).mul(0.4).add(1));
+    const p = u.uA.add(d.mul(t)).add(vec3(0, -1, 0).mul(env).mul(L).mul(0.08).mul(u.uSlack))
+      .add(wig.mul(env).mul(0.35).mul(u.uSlack))
+      .add(s.mul(g.x).add(up.mul(g.z)).mul(r));
+    const mat = new MeshBasicNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+    // the tube is built in world space; the mesh itself stays at the origin with an identity transform
+    mat.positionNode = p;
+    const pulse = sin((varying(t) as N).mul(40).sub(u.uTime.mul(26))).mul(0.45).add(0.55);
+    mat.colorNode = u.uColor.mul(pulse.mul(1.6).add(1.2));
+    mat.opacityNode = float(0.85);
+    glow(mat);
     this.mesh = new THREE.Mesh(geo, mat);
     this.mesh.frustumCulled = false;
     this.mesh.visible = false;

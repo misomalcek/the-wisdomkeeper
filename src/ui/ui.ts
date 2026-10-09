@@ -5,7 +5,7 @@ import { fmtTime } from '../util/math';
 import {
   RARITY, SKILLS, SKINS, SLOTS, SLOT_LABEL, STAT_LABEL, canRank, fmtStat, skinUnlocked, type Derived,
 } from '../systems/progress';
-import { renderPortrait } from './portrait';
+import { cachedPortrait, fillPortraits } from './portrait';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -651,9 +651,10 @@ export class UI {
         : `<div style="color:var(--dim)">Select a piece of gear from your pack to compare it with what you wear. Rare gear drops from Void-Root Fiends, Spore Caches and Pylon purges — and from Embracing the Null.</div>`;
       body.innerHTML = `<div class="inv-grid">
         <div class="slotlist">${slots}</div>
-        <div class="portrait"><img alt="Wisdomkeeper" src="${renderPortrait(run.skin)}"></div>
+        <div class="portrait">${cachedPortrait(run.skin) ? `<img alt="Wisdomkeeper" src="${cachedPortrait(run.skin)}">` : `<img alt="Wisdomkeeper" data-portrait="${run.skin}">`}</div>
         <div><div class="eyebrow" style="margin-bottom:8px">Backpack · ${run.inventory.length}</div><div class="pack">${pack || '<span class="empty">Nothing yet.</span>'}</div><div class="detail">${detail}</div></div>
       </div>`;
+      fillPortraits(body);
       body.querySelectorAll<HTMLElement>('.slotbtn').forEach((b) => {
         b.onclick = () => {
           const it = run.equipped[b.dataset.slot as Slot];
@@ -725,10 +726,11 @@ export class UI {
       const cards = (['resonant', 'verdant', 'void'] as Skin[])
         .map((sk) => {
           const ok = skinUnlocked(run, sk);
-          return `<button class="skin ${run.skin === sk ? 'on' : ''} ${ok ? '' : 'locked'}" data-skin="${sk}"><img alt="${sk}" src="${renderPortrait(sk, 220, 320)}"><b>${SKINS[sk].name}</b><small>${SKINS[sk].blurb}</small><small>${ok ? (run.skin === sk ? 'EQUIPPED' : 'Click to wear') : `LOCKED — ${SKINS[sk].unlock}`}</small></button>`;
+          return `<button class="skin ${run.skin === sk ? 'on' : ''} ${ok ? '' : 'locked'}" data-skin="${sk}"><img alt="${sk}" ${cachedPortrait(sk, 220, 320) ? `src="${cachedPortrait(sk, 220, 320)}"` : `data-portrait="${sk}" data-w="220" data-h="320"`}><b>${SKINS[sk].name}</b><small>${SKINS[sk].blurb}</small><small>${ok ? (run.skin === sk ? 'EQUIPPED' : 'Click to wear') : `LOCKED — ${SKINS[sk].unlock}`}</small></button>`;
         })
         .join('');
       body.innerHTML = `<div class="skins">${cards}</div>`;
+      fillPortraits(body);
       body.querySelectorAll<HTMLElement>('.skin').forEach((b) => {
         b.onclick = () => {
           const sk = b.dataset.skin as Skin;

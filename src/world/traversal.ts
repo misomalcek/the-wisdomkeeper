@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { MeshBasicNodeMaterial } from 'three/webgpu';
+import { glowBasic, standard } from '../engine/materials';
+import { diffuseColor, normalWorld, clamp } from 'three/tsl';
 import type { Rng } from '../util/rng';
 import type { Palette } from '../story/strata';
 import type { Terrain } from './terrain';
@@ -91,25 +94,18 @@ export class MushroomGroves {
   private stalkMesh: THREE.InstancedMesh;
   private rimMesh: THREE.InstancedMesh;
   private disposables: { dispose(): void }[] = [];
-  private rimMat: THREE.MeshBasicMaterial;
+  private rimMat: MeshBasicNodeMaterial;
 
   constructor(terrain: Terrain, physics: Physics, rng: Rng, pal: Palette, sites: { x: number; z: number }[]) {
     const capGeo = capGeometry();
     const stalkGeo = stalkGeometry();
     const rimGeo = new THREE.TorusGeometry(1, 0.035, 6, 48).rotateX(Math.PI / 2);
-    const capMat = new THREE.MeshStandardMaterial({ roughness: 0.62, metalness: 0.05 });
-    capMat.onBeforeCompile = (sh) => {
-      // soft bioluminescent underside: brighter where the normal points down
-      sh.fragmentShader = sh.fragmentShader.replace(
-        '#include <emissivemap_fragment>',
-        `#include <emissivemap_fragment>
-         float under = clamp(-normal.y, 0.0, 1.0);
-         totalEmissiveRadiance += diffuseColor.rgb * (0.12 + under * 0.9);`,
-      );
-    };
+    const capMat = standard({ roughness: 0.62, metalness: 0.05 });
+    // soft bioluminescent underside: brighter where the surface faces down
+    capMat.emissiveNode = diffuseColor.rgb.mul(clamp(normalWorld.y.negate(), 0, 1).mul(0.9).add(0.12));
     occlusionFade(capMat);
-    const stalkMat = occlusionFade(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8 }));
-    this.rimMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
+    const stalkMat = occlusionFade(standard({ color: 0xffffff, roughness: 0.8 }));
+    this.rimMat = glowBasic({ color: 0xffffff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
     this.disposables.push(capGeo, stalkGeo, rimGeo, capMat, stalkMat, this.rimMat);
 
     // ---- lay out the caps
@@ -151,6 +147,7 @@ export class MushroomGroves {
     const stalkCol = new THREE.Color(pal.groundHigh).lerp(new THREE.Color(0xcfd8e8), 0.35);
 
     this.capMesh = new THREE.InstancedMesh(capGeo, capMat, this.caps.length);
+    this.capMesh.castShadow = this.capMesh.receiveShadow = true;
     this.capMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(this.caps.length * 3), 3);
     this.rimMesh = new THREE.InstancedMesh(rimGeo, this.rimMat, this.caps.length);
     this.rimMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(this.caps.length * 3), 3);
@@ -182,6 +179,7 @@ export class MushroomGroves {
     });
 
     this.stalkMesh = new THREE.InstancedMesh(stalkGeo, stalkMat, stalks.length);
+    this.stalkMesh.castShadow = true;
     this.stalkMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(stalks.length * 3), 3);
     stalks.forEach((s, i) => {
       _o.position.set(s.x, s.y, s.z);
@@ -286,7 +284,7 @@ export class DriftField {
   readonly group = new THREE.Group();
   readonly platforms: DriftPlatform[] = [];
   private disposables: { dispose(): void }[] = [];
-  private coreMat: THREE.MeshBasicMaterial;
+  private coreMat: MeshBasicNodeMaterial;
   private base: THREE.Color;
 
   constructor(terrain: Terrain, physics: Physics, rng: Rng, pal: Palette, sites: { x: number; z: number }[]) {
@@ -297,10 +295,10 @@ export class DriftField {
     slabGeo.computeVertexNormals();
     const trimGeo = new THREE.BoxGeometry(3.6, 0.08, 2.6);
     const coreGeo = new THREE.OctahedronGeometry(0.32, 0);
-    const slabMat = new THREE.MeshStandardMaterial({ color: 0x232838, roughness: 0.45, metalness: 0.7, emissive: pal.accent, emissiveIntensity: 0.04 });
-    const trimMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(pal.accent).multiplyScalar(2.2) });
+    const slabMat = standard({ color: 0x232838, roughness: 0.45, metalness: 0.7, emissive: pal.accent, emissiveIntensity: 0.04 });
+    const trimMat = glowBasic({ color: new THREE.Color(pal.accent).multiplyScalar(2.2) });
     this.base = new THREE.Color(pal.accent);
-    this.coreMat = new THREE.MeshBasicMaterial({ color: this.base.clone().multiplyScalar(2.6) });
+    this.coreMat = glowBasic({ color: this.base.clone().multiplyScalar(2.6) });
     this.disposables.push(slabGeo, trimGeo, coreGeo, slabMat, trimMat, this.coreMat);
     for (const s of sites) {
       const y = terrain.heightAt(s.x, s.z) + rng.range(6, 11);

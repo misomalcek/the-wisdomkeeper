@@ -5,22 +5,27 @@ const _f = new THREE.Vector3();
 const _r = new THREE.Vector3();
 const _p = new THREE.Vector3();
 
+/** Blueprint camera: shoulder offset (0.8, 1.8, 4.0), pitch limited to ±60°. */
+export const CAMERA = { shoulder: 0.8, height: 1.8, distance: 4.0, pitchLimit: Math.PI / 3, minDist: 0, maxDist: 10 };
+
 /**
  * Over-the-shoulder third-person camera. yaw: forward = (sin yaw, ., cos yaw);
  * pitch > 0 looks down. Ducks above terrain so it never clips into hills.
+ * The mouse wheel dollies continuously from a wide third-person view down into first person.
  */
 export class ThirdPersonCam {
   yaw = Math.PI;
   pitch = 0.22;
   sens = 0.0022;
-  dist = 6.2;
-  shoulder = 0.85;
+  /** Player-chosen follow distance (wheel); 0 = first person. */
+  dist: number = CAMERA.distance;
+  shoulder = CAMERA.shoulder;
   readonly pos = new THREE.Vector3();
   private pivot = new THREE.Vector3();
   private shake = 0;
   private fov = 62;
-  private curDist = 6.2;
-  private curShoulder = 0.85;
+  private curDist: number = CAMERA.distance;
+  private curShoulder: number = CAMERA.shoulder;
   /** Transition hooks: scale distance / add FOV, and optionally look at another point. */
   zoom = 1;
   zoomTarget = 1;
@@ -39,7 +44,20 @@ export class ThirdPersonCam {
 
   look(dx: number, dy: number) {
     this.yaw -= dx * this.sens;
-    this.pitch = clamp(this.pitch + dy * this.sens, -0.55, 1.2);
+    this.pitch = clamp(this.pitch + dy * this.sens, -CAMERA.pitchLimit, CAMERA.pitchLimit);
+  }
+
+  /** Mouse-wheel dolly: positive steps zoom out. Snaps the last step into first person. */
+  wheel(steps: number) {
+    if (!steps) return;
+    let d = this.dist <= 0.01 && steps > 0 ? 1.2 : this.dist * Math.pow(1.18, steps);
+    if (d < 1.1) d = 0;
+    this.dist = clamp(d, CAMERA.minDist, CAMERA.maxDist);
+  }
+
+  /** True while the lens sits inside the hero's head (the hero mesh should be hidden). */
+  get firstPerson() {
+    return this.curDist < 0.55;
   }
 
   /** Direction the camera looks (unit). */
@@ -61,7 +79,9 @@ export class ThirdPersonCam {
     this.forward3D(_f);
     _r.set(-Math.cos(this.yaw), 0, Math.sin(this.yaw));
     const d = this.curDist;
-    _p.copy(this.pivot).addScaledVector(_f, -d).addScaledVector(_r, this.curShoulder * (d / this.dist > 0.5 ? 1 : 0));
+    // shoulder offset fades out as the lens closes in on the head
+    const sh = this.curShoulder * clamp((d - 0.4) / 1.6, 0, 1);
+    _p.copy(this.pivot).addScaledVector(_f, -d).addScaledVector(_r, sh);
     // keep the lens above the ground and pull the camera in if terrain blocks the line of sight
     let t = 1;
     for (let i = 1; i <= 6; i++) {
@@ -92,7 +112,8 @@ export class ThirdPersonCam {
     this.pivot.y = damp(this.pivot.y, tgt.y, this.override ? 4 : 12, dt);
     this.pivot.z = damp(this.pivot.z, tgt.z, k, dt);
     this.shake = Math.max(0, this.shake - dt * 2.8);
-    const wantDist = (opts.aim ? 3.6 : opts.flight ? 8.2 : this.dist) * this.zoom;
+    const base = this.dist;
+    const wantDist = (opts.aim ? Math.min(base, 2.6) : opts.flight ? Math.max(base * 1.6, base > 0 ? 6.5 : 0) : base) * this.zoom;
     this.curDist = damp(this.curDist, wantDist, 9, dt);
     this.curShoulder = damp(this.curShoulder, opts.aim ? 1.15 : this.shoulder, 9, dt);
     const wantFov = (opts.aim ? 46 : opts.flight ? 74 : opts.sprint ? 68 : 62) + this.fovBoost;

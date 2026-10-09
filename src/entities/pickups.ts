@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { glowBasic } from '../engine/materials';
 import type { Game } from '../game';
 import type { Item } from '../types';
 import { RARITY } from '../systems/progress';
@@ -31,13 +32,13 @@ export class Pickups {
   private items: Pickup[] = [];
 
   constructor() {
-    this.mesh = new THREE.InstancedMesh(new THREE.OctahedronGeometry(0.34, 0), new THREE.MeshBasicMaterial(), MAX);
+    this.mesh = new THREE.InstancedMesh(new THREE.OctahedronGeometry(0.34, 0), glowBasic(), MAX);
     this.mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX * 3), 3);
     this.mesh.count = 0;
     this.mesh.frustumCulled = false;
     this.beams = new THREE.InstancedMesh(
       new THREE.CylinderGeometry(0.12, 0.5, 14, 8, 1, true).translate(0, 7, 0),
-      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
+      glowBasic({ transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
       MAX,
     );
     this.beams.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX * 3), 3);

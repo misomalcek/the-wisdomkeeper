@@ -25,7 +25,9 @@ export async function launch({ width = 1280, height = 720 } = {}) {
   });
   const page = await browser.newPage({ viewport: { width, height } });
   const logs = [];
-  page.on('console', (m) => { if (['error', 'warning'].includes(m.type())) logs.push(`[${m.type()}] ${m.text()}`); });
+  // Headless Chromium has no WebGPU adapter: the renderer's fallback notices are expected, not failures.
+  const expected = /WebGPU is not available|Failed to create WebGPU Context Provider|GL Driver Message \(OpenGL, Performance/;
+  page.on('console', (m) => { if (['error', 'warning'].includes(m.type()) && !expected.test(m.text())) logs.push(`[${m.type()}] ${m.text()}`); });
   page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`));
   return { browser, page, logs };
 }

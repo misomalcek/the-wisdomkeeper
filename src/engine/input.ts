@@ -66,6 +66,14 @@ export class Input {
       if (e.button === 2) this.mouseRight = false;
     });
     target.addEventListener('contextmenu', (e) => e.preventDefault());
+    target.addEventListener(
+      'wheel',
+      (e) => {
+        e.preventDefault();
+        this.wheelSteps += Math.sign((e as WheelEvent).deltaY);
+      },
+      { passive: false },
+    );
     document.addEventListener('pointerlockchange', () => {
       const l = this.locked;
       if (!l) this.mouseLeft = this.mouseRight = false;
@@ -99,6 +107,13 @@ export class Input {
     this.lookX = this.lookY = 0;
     return out;
   }
+  /** Accumulated mouse-wheel notches since the last call (+ = away from the screen / zoom out). */
+  consumeWheel() {
+    const w = this.wheelSteps;
+    this.wheelSteps = 0;
+    return w;
+  }
+  private wheelSteps = 0;
   addLook(dx: number, dy: number) {
     this.lookX += dx;
     this.lookY += dy;

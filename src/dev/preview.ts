@@ -1,9 +1,11 @@
 // Dev-only: hero pose gallery (served by `vite`, not part of the production build).
 import * as THREE from 'three';
+import { WebGPURenderer, MeshStandardNodeMaterial } from 'three/webgpu';
 import { Hero, idlePose, type HeroPose } from '../entities/hero';
 import type { Skin } from '../types';
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new WebGPURenderer({ antialias: true, forceWebGL: new URLSearchParams(location.search).has('webgl') });
+await renderer.init();
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 document.body.appendChild(renderer.domElement);
@@ -14,7 +16,7 @@ scene.add(new THREE.HemisphereLight(0x99ccff, 0x223322, 1.2));
 const sun = new THREE.DirectionalLight(0xffffff, 2);
 sun.position.set(3, 6, 4);
 scene.add(sun);
-const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 10).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x0c2a28 }));
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 10).rotateX(-Math.PI / 2), new MeshStandardNodeMaterial({ color: 0x0c2a28 }));
 scene.add(floor);
 
 const poses: { name: string; skin: Skin; f: (p: HeroPose) => void }[] = [

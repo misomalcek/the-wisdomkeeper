@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { LineBasicNodeMaterial } from 'three/webgpu';
+import { uniform, attribute, smoothstep, exp, sin, mix, positionLocal } from 'three/tsl';
+import { glow, type N } from '../engine/materials';
 import type { Rng } from '../util/rng';
 import type { Palette } from '../story/strata';
 import type { Terrain } from './terrain';
@@ -32,7 +35,7 @@ export class Mycelium {
   private anchors: { x: number; z: number }[] = [];
   private acc = 0;
   private now = 0;
-  private u: Record<string, THREE.IUniform>;
+  private u: { time: N; a: N; b: N };
   private geo = new THREE.BufferGeometry();
 
   constructor(private terrain: Terrain, private rng: Rng, palette: Palette) {
@@ -41,30 +44,22 @@ export class Mycelium {
     this.geo.setAttribute('aKind', new THREE.BufferAttribute(this.kind, 1));
     this.geo.setDrawRange(0, 0);
     this.u = {
-      uTime: { value: 0 },
-      uA: { value: new THREE.Color(palette.accent).multiplyScalar(1.05) },
-      uB: { value: new THREE.Color(palette.accent2).multiplyScalar(1.05) },
+      time: uniform(0),
+      a: uniform(new THREE.Color(palette.accent).multiplyScalar(1.05)),
+      b: uniform(new THREE.Color(palette.accent2).multiplyScalar(1.05)),
     };
-    const mat = new THREE.ShaderMaterial({
-      uniforms: this.u,
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      vertexShader: /* glsl */ `
-        attribute float aBirth; attribute float aKind; varying float vBirth; varying float vKind; varying vec3 vP;
-        void main(){ vBirth = aBirth; vKind = aKind; vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-      fragmentShader: /* glsl */ `
-        uniform float uTime; uniform vec3 uA, uB; varying float vBirth; varying float vKind; varying vec3 vP;
-        void main(){
-          float age = uTime - vBirth;
-          if (age < 0.0) discard;
-          float reveal = smoothstep(0.0, 0.35, age);
-          float flash = exp(-age * 2.2) * 0.6;
-          float pulse = 0.5 + 0.5 * sin(uTime * 2.4 - (vP.x + vP.z) * 0.35 + vKind * 5.0);
-          vec3 c = mix(uA, uB, vKind) * (0.26 + 0.6 * pulse * pulse + flash);
-          gl_FragColor = vec4(c * reveal, reveal);
-        }`,
-    });
+    const birth: N = attribute('aBirth', 'float');
+    const kind: N = attribute('aKind', 'float');
+    const age = this.u.time.sub(birth);
+    const reveal = smoothstep(0, 0.35, age);
+    const flash = exp(age.mul(-2.2)).mul(0.6);
+    const pulse = sin(this.u.time.mul(2.4).sub(positionLocal.x.add(positionLocal.z).mul(0.35)).add(kind.mul(5))).mul(0.5).add(0.5);
+    const c = mix(this.u.a, this.u.b, kind).mul(pulse.mul(pulse).mul(0.6).add(0.26).add(flash));
+    const mat = new LineBasicNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
+    mat.colorNode = c.mul(reveal);
+    mat.opacityNode = reveal;
+    mat.maskNode = age.greaterThanEqual(0);
+    glow(mat, 0.9);
     this.lines = new THREE.LineSegments(this.geo, mat);
     this.lines.frustumCulled = false;
     this.lines.renderOrder = 2;
@@ -183,7 +178,7 @@ export class Mycelium {
 
   update(dt: number, t: number) {
     this.now = t;
-    this.u.uTime.value = t;
+    this.u.time.value = t;
     this.acc += dt;
     while (this.acc > 0.06) {
       this.acc -= 0.06;

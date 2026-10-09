@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { standard } from '../engine/materials';
+import { diffuseColor } from 'three/tsl';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { LAYER, RAPIER, groups, type Physics, type Stepper } from './physics';
 
@@ -46,14 +48,9 @@ export class Debris implements Stepper {
   constructor(private physics: Physics) {
     const shardGeo = shardGeometry();
     const rubbleGeo = new THREE.DodecahedronGeometry(0.22, 0);
-    const shardMat = new THREE.MeshStandardMaterial({ roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.92 });
-    shardMat.onBeforeCompile = (sh) => {
-      sh.fragmentShader = sh.fragmentShader.replace(
-        '#include <emissivemap_fragment>',
-        `#include <emissivemap_fragment>\n totalEmissiveRadiance = diffuseColor.rgb * 1.4;`,
-      );
-    };
-    const rubbleMat = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0.05 });
+    const shardMat = standard({ roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.92 });
+    shardMat.emissiveNode = diffuseColor.rgb.mul(1.4);
+    const rubbleMat = standard({ roughness: 0.85, metalness: 0.05 });
     this.disposables.push(shardGeo, rubbleGeo, shardMat, rubbleMat);
     this.shards = new THREE.InstancedMesh(shardGeo, shardMat, MAX_SHARDS);
     this.rubble = new THREE.InstancedMesh(rubbleGeo, rubbleMat, MAX_RUBBLE);

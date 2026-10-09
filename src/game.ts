@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { Affinity, Choice, EnemyKind, Item, LibraryEntry, PlayStats, Remembrance, RunState, Skin } from './types';
+import { setPortraitRenderer } from './ui/portrait';
 import { Gfx } from './engine/gfx';
 import { ThirdPersonCam } from './engine/camera';
 import { Input } from './engine/input';
@@ -146,8 +147,9 @@ export class Game {
   /** Time scale while the traversal wheel is open. */
   private slowmo = 1;
 
-  constructor(root: HTMLElement) {
-    this.gfx = new Gfx(root);
+  constructor(gfx: Gfx) {
+    this.gfx = gfx;
+    setPortraitRenderer(gfx.renderer);
     this.cam = new ThirdPersonCam(this.gfx.camera);
     this.combat = new Combat(this);
     const canvas = this.gfx.renderer.domElement;
@@ -166,7 +168,7 @@ export class Game {
     });
 
     const scene = this.gfx.scene;
-    scene.add(this.particles.points, this.projectiles.group, this.pickups.group, this.player.group, this.player.blobMesh, this.combat.fx.group, this.player.tether.mesh);
+    scene.add(this.particles.sprite, this.projectiles.group, this.pickups.group, this.player.group, this.player.blobMesh, this.combat.fx.group, this.player.tether.mesh);
 
     this.applySettings();
     this.bindUI();
@@ -188,20 +190,20 @@ export class Game {
     if (!s) return;
     this.audio.volume = s.vol ?? 0.7;
     this.audio.muted = !!s.muted;
-    this.gfx.bloom.enabled = this.gfx.bloomEnabled = s.bloom !== false;
+    this.gfx.setBloom(s.bloom !== false);
     (document.getElementById('vol') as HTMLInputElement).value = String(Math.round(this.audio.volume * 100));
     if (s.sens) {
       (document.getElementById('sens') as HTMLInputElement).value = String(s.sens);
       this.cam.sens = 0.0022 * (s.sens / 100);
     }
     this.ui.setMuteLabel(this.audio.muted);
-    this.ui.setBloomLabel(this.gfx.bloom.enabled);
+    this.ui.setBloomLabel(this.gfx.bloomEnabled);
   }
   private saveSettings() {
     store.set(SET_KEY, {
       vol: this.audio.volume,
       muted: this.audio.muted,
-      bloom: this.gfx.bloom.enabled,
+      bloom: this.gfx.bloomEnabled,
       sens: Math.round((this.cam.sens / 0.0022) * 100),
     });
   }
@@ -248,8 +250,8 @@ export class Game {
       this.saveSettings();
     });
     ui.on('btn-bloom', () => {
-      this.gfx.bloom.enabled = !this.gfx.bloom.enabled;
-      ui.setBloomLabel(this.gfx.bloom.enabled);
+      this.gfx.setBloom(!this.gfx.bloomEnabled);
+      ui.setBloomLabel(this.gfx.bloomEnabled);
       this.saveSettings();
     });
     (document.getElementById('vol') as HTMLInputElement).addEventListener('input', (e) => {
@@ -295,7 +297,7 @@ export class Game {
       this.input.requestLock();
     }
     this.ui.setMuteLabel(this.audio.muted);
-    this.ui.setBloomLabel(this.gfx.bloom.enabled);
+    this.ui.setBloomLabel(this.gfx.bloomEnabled);
   }
 
   /** After closing a sub-overlay: back to the pause menu if paused from there, else resume. */
@@ -445,6 +447,7 @@ export class Game {
     this.palette.accentHDR.set(p.accent).multiplyScalar(1.8);
     this.palette.accent2HDR.set(p.accent2).multiplyScalar(1.8);
     this.combat.fx.setShieldColor(p.accent2);
+    this.gfx.setEnvironment(this.world.sky.envScene(), def.id === 'mirror' ? 0.8 : 0.55);
     this.audio.setMood(def.music);
   }
 
@@ -641,6 +644,7 @@ export class Game {
     }
     this.particles.setScale(this.gfx.pointScale);
     this.gfx.camera.updateMatrixWorld();
+    this.gfx.followShadow(this.player.x, this.player.y, this.player.z);
     updateOcclusion(this.gfx.renderer, this.gfx.camera, this.tmp.set(this.player.x, this.player.y + 1, this.player.z));
     this.gfx.render();
     this.input.endFrame();
@@ -881,6 +885,7 @@ export class Game {
     const ar = (this.input.isDown('ArrowLeft') ? 1 : 0) - (this.input.isDown('ArrowRight') ? 1 : 0);
     const au = (this.input.isDown('ArrowDown') ? 1 : 0) - (this.input.isDown('ArrowUp') ? 1 : 0);
     if (ar || au) this.cam.look(-ar * dt * 900, au * dt * 700);
+    this.cam.wheel(this.input.consumeWheel());
 
     this.computeAim();
     this.computeTetherAim();
@@ -922,6 +927,7 @@ export class Game {
       }
     } else if (!this.trans) this.cam.zoomTarget = 1;
     this.cam.update(dt, target, { aim: p.aiming && !dead, flight: p.mode === 'flight', sprint: p.speed > 9 });
+    p.hero.root.visible = !this.cam.firstPerson;
 
     const alive = this.enemies.filter((e) => !e.idle).length;
     this.audio.setIntensity(clamp(alive / 14 + (this.encounter ? 0.25 : 0) + (this.boss?.activated && !this.bossDown ? 0.4 : 0), 0, 1));

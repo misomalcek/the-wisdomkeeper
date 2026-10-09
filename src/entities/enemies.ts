@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { MeshBasicNodeMaterial, MeshStandardNodeMaterial, LineBasicNodeMaterial } from 'three/webgpu';
+import { glowBasic, standard, glowLine, fresnel, type N } from '../engine/materials';
+import { uniform, positionGeometry, sin, smoothstep, vec3, materialEmissive } from 'three/tsl';
 import type { Game } from '../game';
 import type { EnemyKind } from '../types';
 import { TAU, angleDiff, clamp, damp } from '../util/math';
@@ -122,15 +125,15 @@ export class Enemy {
   atkN = 0;
   invuln = 0;
   // visuals
-  coreMat: THREE.MeshStandardMaterial | THREE.MeshBasicMaterial;
-  edgeMat: THREE.LineBasicMaterial;
+  coreMat: MeshStandardNodeMaterial | MeshBasicNodeMaterial;
+  edgeMat: LineBasicNodeMaterial;
   baseEmissive = 0.7;
   tele?: THREE.Mesh;
-  teleMat?: THREE.MeshBasicMaterial;
+  teleMat?: MeshBasicNodeMaterial;
   spinners: THREE.Object3D[] = [];
   extraMats: THREE.Material[] = [];
-  readonly uHurt = { value: 0 };
-  readonly uT = { value: 0 };
+  readonly uHurt: N = uniform(0);
+  readonly uT: N = uniform(0);
   j: { legL?: THREE.Group; legR?: THREE.Group; armL?: THREE.Group; armR?: THREE.Group; head?: THREE.Group; torso?: THREE.Group; core?: THREE.Mesh } = {};
   bar?: THREE.Mesh;
   barBg?: THREE.Mesh;
@@ -153,14 +156,14 @@ export class Enemy {
     const hover = kind === 'mite' ? 1.6 : kind === 'spitter' ? 2.6 : s.foot;
     this.y = groundY + hover;
     this.group.add(this.body);
-    this.edgeMat = new THREE.LineBasicMaterial({ color: HOT.clone().multiplyScalar(2.2) });
+    this.edgeMat = glowLine({ color: HOT.clone().multiplyScalar(2.2) });
     const solid = (emissive: number) =>
-      new THREE.MeshStandardMaterial({ color: 0x14060c, emissive: HOT, emissiveIntensity: emissive, roughness: 0.4, metalness: 0.6, flatShading: true });
+      standard({ color: 0x14060c, emissive: HOT, emissiveIntensity: emissive, roughness: 0.4, metalness: 0.6, flatShading: true });
 
     if (kind === 'mite') {
       this.coreMat = solid(0.8);
       this.baseEmissive = 0.8;
-      const core = new THREE.Mesh(GEO.miteCore, new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff9ab8).multiplyScalar(2.6) }));
+      const core = new THREE.Mesh(GEO.miteCore, glowBasic({ color: new THREE.Color(0xff9ab8).multiplyScalar(2.6) }));
       this.extraMats.push(core.material as THREE.Material);
       this.body.add(new THREE.Mesh(GEO.mite, this.coreMat), new THREE.LineSegments(GEO.miteEdges, this.edgeMat), core);
       for (let i = 0; i < 4; i++) {
@@ -178,7 +181,7 @@ export class Enemy {
       cone.rotation.x = Math.PI;
       const edges = new THREE.LineSegments(GEO.spitterEdges, this.edgeMat);
       edges.rotation.x = Math.PI;
-      const ringMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff8a3b).multiplyScalar(2) });
+      const ringMat = glowBasic({ color: new THREE.Color(0xff8a3b).multiplyScalar(2) });
       this.extraMats.push(ringMat);
       const ring = new THREE.Mesh(GEO.ring, ringMat);
       ring.rotation.x = Math.PI / 2;
@@ -188,12 +191,12 @@ export class Enemy {
     } else {
       this.scale = kind === 'boss' ? 3.2 : 1.25;
       this.buildFiend();
-      this.coreMat = this.j.core!.material as THREE.MeshBasicMaterial;
+      this.coreMat = this.j.core!.material as MeshBasicNodeMaterial;
       this.baseEmissive = 1;
       this.group.scale.setScalar(0.01);
       if (kind === 'boss') {
         GEO.haloRing.forEach((g, i) => {
-          const rm = new THREE.MeshBasicMaterial({ color: (i === 0 ? new THREE.Color(0xe8f4ff) : HOT.clone()).multiplyScalar(2.2) });
+          const rm = glowBasic({ color: (i === 0 ? new THREE.Color(0xe8f4ff) : HOT.clone()).multiplyScalar(2.2) });
           this.extraMats.push(rm);
           const r = new THREE.Mesh(g, rm);
           r.position.y = 5.2;
@@ -209,8 +212,8 @@ export class Enemy {
       } else {
         this.makeTele(2.8, 18);
         // floating health bar for fiends
-        this.barBg = new THREE.Mesh(GEO.bar, new THREE.MeshBasicMaterial({ color: 0x1a0a12, transparent: true, opacity: 0.8, depthWrite: false }));
-        this.bar = new THREE.Mesh(GEO.bar, new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff3b7a).multiplyScalar(1.4), depthWrite: false }));
+        this.barBg = new THREE.Mesh(GEO.bar, glowBasic({ color: 0x1a0a12, transparent: true, opacity: 0.8, depthWrite: false }));
+        this.bar = new THREE.Mesh(GEO.bar, glowBasic({ color: new THREE.Color(0xff3b7a).multiplyScalar(1.4), depthWrite: false }));
         this.extraMats.push(this.barBg.material as THREE.Material, this.bar.material as THREE.Material);
         this.barBg.scale.set(1.6, 1, 1);
         this.bar.renderOrder = this.barBg.renderOrder + 1;
@@ -223,30 +226,20 @@ export class Enemy {
     if (kind !== 'brute' && kind !== 'boss') this.group.scale.setScalar(0.01);
     else this.group.scale.setScalar(0.01);
     this.yawFace = Math.random() * TAU;
+    this.group.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh && o !== this.bar && o !== this.barBg) o.castShadow = true;
+    });
   }
 
   private fiendMat(color: number, vein: number) {
-    const m = new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.35, flatShading: false, emissive: 0x050208, emissiveIntensity: 1 });
+    const m = standard({ color, roughness: 0.6, metalness: 0.35, flatShading: false, emissive: 0x050208, emissiveIntensity: 1 });
     const uHurt = this.uHurt;
     const uT = this.uT;
-    const veinCol = new THREE.Color(vein);
-    m.onBeforeCompile = (sh) => {
-      sh.uniforms.uHurt = uHurt;
-      sh.uniforms.uT = uT;
-      sh.uniforms.uVein = { value: veinCol };
-      sh.vertexShader = sh.vertexShader.replace('void main() {', 'varying vec3 vOP;\nvoid main() {\n  vOP = position;');
-      sh.fragmentShader = sh.fragmentShader
-        .replace('void main() {', 'varying vec3 vOP; uniform vec3 uVein; uniform float uT; uniform float uHurt;\nvoid main() {')
-        .replace(
-          '#include <emissivemap_fragment>',
-          `#include <emissivemap_fragment>
-          float fv = sin(vOP.y * 9.0 + sin(vOP.x * 7.0 + vOP.z * 5.0) * 2.0 + uT * 0.5);
-          float fvein = smoothstep(0.9, 0.99, fv) * (0.6 + 0.4 * sin(uT * 2.2 + vOP.x * 5.0));
-          float frim = pow(1.0 - clamp(dot(normalize(vNormal), normalize(vViewPosition)), 0.0, 1.0), 3.0);
-          totalEmissiveRadiance += uVein * (fvein * 1.4 + frim * 0.35) + vec3(1.0, 0.95, 0.95) * uHurt;`,
-        );
-    };
-    m.customProgramCacheKey = () => 'fiendSkin';
+    const veinCol = uniform(new THREE.Color(vein));
+    const o: N = positionGeometry;
+    const fv = sin(o.y.mul(9).add(sin(o.x.mul(7).add(o.z.mul(5))).mul(2)).add(uT.mul(0.5)));
+    const fvein = smoothstep(0.9, 0.99, fv).mul(sin(uT.mul(2.2).add(o.x.mul(5))).mul(0.4).add(0.6));
+    m.emissiveNode = materialEmissive.add(veinCol.mul(fvein.mul(1.4).add(fresnel(3).mul(0.35)))).add(vec3(1, 0.95, 0.95).mul(uHurt));
     this.extraMats.push(m);
     return m;
   }
@@ -255,11 +248,11 @@ export class Enemy {
   private buildFiend() {
     const bodyMat = this.fiendMat(0x1b1426, 0x7cff6b);
     const darkMat = this.fiendMat(0x0f0a18, 0x4fd8ff);
-    const thornMat = new THREE.MeshStandardMaterial({ color: 0x0a0610, roughness: 0.5, metalness: 0.4, emissive: 0x7cff6b, emissiveIntensity: 0.25 });
+    const thornMat = standard({ color: 0x0a0610, roughness: 0.5, metalness: 0.4, emissive: 0x7cff6b, emissiveIntensity: 0.25 });
     this.extraMats.push(thornMat);
-    const glow = new THREE.MeshBasicMaterial({ color: new THREE.Color(0x8cff9a).multiplyScalar(2.4) });
+    const glow = glowBasic({ color: new THREE.Color(0x8cff9a).multiplyScalar(2.4) });
     this.extraMats.push(glow);
-    const coreMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffa24a).multiplyScalar(2.6) });
+    const coreMat = glowBasic({ color: new THREE.Color(0xffa24a).multiplyScalar(2.6) });
     this.extraMats.push(coreMat);
     const b = this.body;
 
@@ -360,7 +353,7 @@ export class Enemy {
   }
 
   private makeTele(width: number, len: number) {
-    this.teleMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff3b4a).multiplyScalar(1.6), transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+    this.teleMat = glowBasic({ color: new THREE.Color(0xff3b4a).multiplyScalar(1.6), transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
     this.tele = new THREE.Mesh(GEO.tele, this.teleMat);
     this.tele.scale.set(width, 1, len);
     this.tele.visible = false;
@@ -474,7 +467,7 @@ export function updateEnemy(e: Enemy, g: Game, dt: number) {
   e.edgeMat.color.copy(f ? WHITE : HOT).multiplyScalar(f ? 1 : 2.2);
   e.uHurt.value = f ? 0.8 : 0;
   e.uT.value = g.time;
-  if (e.coreMat instanceof THREE.MeshStandardMaterial) e.coreMat.emissiveIntensity = f ? 4 : e.baseEmissive + (e.state === 'wind' ? 1.5 : 0);
+  if (e.coreMat instanceof MeshStandardNodeMaterial) e.coreMat.emissiveIntensity = f ? 4 : e.baseEmissive + (e.state === 'wind' ? 1.5 : 0);
   else {
     // fiend core pulses; brighter while telegraphing
     const pulse = 2.6 + Math.sin(g.time * (e.state === 'wind' ? 14 : 4)) * 0.6;

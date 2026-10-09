@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { MeshBasicNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu';
+import { glowBasic, standard, fresnel, type N } from '../engine/materials';
+import { uniform, positionGeometry, sin, smoothstep, vec3, materialEmissive } from 'three/tsl';
 import type { Skin } from '../types';
 import { clamp } from '../util/math';
 
@@ -65,20 +68,20 @@ export class Hero {
   private held = false;
   private heldUntil = 0;
   private disposables: { dispose(): void }[] = [];
-  private u = { uVein: { value: new THREE.Color() }, uT: { value: 0 }, uHurt: { value: 0 } };
-  private skinMat: THREE.MeshStandardMaterial;
-  private armorMat: THREE.MeshStandardMaterial;
-  private glowMat: THREE.MeshBasicMaterial;
-  private bladeMat: THREE.MeshBasicMaterial;
+  private u: { uVein: N; uT: N; uHurt: N } = { uVein: uniform(new THREE.Color()), uT: uniform(0), uHurt: uniform(0) };
+  private skinMat: MeshStandardNodeMaterial;
+  private armorMat: MeshStandardNodeMaterial;
+  private glowMat: MeshBasicNodeMaterial;
+  private bladeMat: MeshBasicNodeMaterial;
   private veinCol = new THREE.Color();
 
   constructor(skin: Skin = 'resonant') {
     for (const k of KEYS) this.cur[k] = 0;
     const look = SKIN_LOOK[skin];
     this.skinMat = this.makeSkinMat(look.body);
-    this.armorMat = new THREE.MeshStandardMaterial({ color: look.armor, roughness: 0.38, metalness: 0.55, emissive: look.vein, emissiveIntensity: 0.08 });
-    this.glowMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(look.vein).multiplyScalar(2.2) });
-    this.bladeMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(look.accent).multiplyScalar(2.2) });
+    this.armorMat = standard({ color: look.armor, roughness: 0.38, metalness: 0.55, emissive: look.vein, emissiveIntensity: 0.08 });
+    this.glowMat = glowBasic({ color: new THREE.Color(look.vein).multiplyScalar(2.2) });
+    this.bladeMat = glowBasic({ color: new THREE.Color(look.accent).multiplyScalar(2.2) });
     this.disposables.push(this.skinMat, this.armorMat, this.glowMat, this.bladeMat);
 
     const geo = <T extends THREE.BufferGeometry>(g: T) => (this.disposables.push(g), g);
@@ -252,28 +255,22 @@ export class Hero {
     this.setBlade(false);
 
     this.setSkin(skin);
+    this.root.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) o.castShadow = true;
+    });
   }
 
   private makeSkinMat(color: number) {
-    const m = new THREE.MeshStandardMaterial({ color, roughness: 0.3, metalness: 0.1, emissive: 0x06201c, emissiveIntensity: 0.6 });
+    const m = standard({ color, roughness: 0.3, metalness: 0.1, emissive: 0x06201c, emissiveIntensity: 0.6 });
     const u = this.u;
-    m.onBeforeCompile = (sh) => {
-      sh.uniforms.uVein = u.uVein;
-      sh.uniforms.uT = u.uT;
-      sh.uniforms.uHurt = u.uHurt;
-      sh.vertexShader = sh.vertexShader.replace('void main() {', 'varying vec3 vOP;\nvoid main() {\n  vOP = position;');
-      sh.fragmentShader = sh.fragmentShader
-        .replace('void main() {', 'varying vec3 vOP; uniform vec3 uVein; uniform float uT; uniform float uHurt;\nvoid main() {')
-        .replace(
-          '#include <emissivemap_fragment>',
-          `#include <emissivemap_fragment>
-          float hv = sin(vOP.y * 34.0 + sin(vOP.x * 22.0 + vOP.z * 14.0) * 1.9 + uT * 0.8);
-          float vein = smoothstep(0.93, 0.995, hv) * (0.55 + 0.45 * sin(vOP.x * 40.0 + vOP.z * 31.0));
-          float rim = pow(1.0 - clamp(dot(normalize(vNormal), normalize(vViewPosition)), 0.0, 1.0), 2.4);
-          totalEmissiveRadiance += uVein * (vein * (1.1 + 0.4 * sin(uT * 2.0)) + rim * 0.5) + vec3(1.0, 0.25, 0.35) * uHurt;`,
-        );
-    };
-    m.customProgramCacheKey = () => 'heroSkin';
+    const o: N = positionGeometry;
+    const hv = sin(o.y.mul(34).add(sin(o.x.mul(22).add(o.z.mul(14))).mul(1.9)).add(u.uT.mul(0.8)));
+    const vein = smoothstep(0.93, 0.995, hv).mul(sin(o.x.mul(40).add(o.z.mul(31))).mul(0.45).add(0.55));
+    // Data-Stream suit: light flows up the veins at the blueprint's 1.5 Hz pulse
+    const flow = sin(o.y.mul(18).sub(u.uT.mul(1.5 * 6.283))).mul(0.5).add(0.5);
+    m.emissiveNode = materialEmissive
+      .add(u.uVein.mul(vein.mul(sin(u.uT.mul(2)).mul(0.4).add(1.1)).mul(flow.mul(0.6).add(0.6)).add(fresnel(2.4).mul(0.5))))
+      .add(vec3(1, 0.25, 0.35).mul(u.uHurt));
     return m;
   }
 

@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { standard, selfLit, fresnel } from '../engine/materials';
+import { diffuseColor } from 'three/tsl';
 import type { Rng } from '../util/rng';
 import type { Palette } from '../story/strata';
 import type { Terrain } from './terrain';
@@ -69,13 +71,7 @@ export class Props implements Stepper {
     geo.setAttribute('position', new THREE.BufferAttribute(arr, 3));
     geo.computeVertexNormals();
     [prism, tip, ...pos].forEach((g) => g.dispose());
-    const cmat = new THREE.MeshStandardMaterial({ roughness: 0.12, metalness: 0.15 });
-    cmat.onBeforeCompile = (sh) => {
-      sh.fragmentShader = sh.fragmentShader.replace(
-        '#include <emissivemap_fragment>',
-        `#include <emissivemap_fragment>\n totalEmissiveRadiance = diffuseColor.rgb * 0.9;`,
-      );
-    };
+    const cmat = selfLit(0.9, { roughness: 0.12, metalness: 0.15 });
     occlusionFade(cmat);
     this.disposables.push(geo, cmat);
     const prisms: { x: number; y: number; z: number; s: number; q: THREE.Quaternion }[] = [];
@@ -117,15 +113,8 @@ export class Props implements Stepper {
       pp.setXYZ(i, x * lobe, y * (y > 0 ? 1.1 : 0.9), z * lobe);
     }
     podGeo.computeVertexNormals();
-    const pmat = new THREE.MeshStandardMaterial({ roughness: 0.35, metalness: 0, transparent: true, opacity: 0.94 });
-    pmat.onBeforeCompile = (sh) => {
-      sh.fragmentShader = sh.fragmentShader.replace(
-        '#include <emissivemap_fragment>',
-        `#include <emissivemap_fragment>
-         float rim = pow(1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition))), 2.0);
-         totalEmissiveRadiance = diffuseColor.rgb * (0.55 + rim * 1.6);`,
-      );
-    };
+    const pmat = standard({ roughness: 0.35, metalness: 0, transparent: true, opacity: 0.94 });
+    pmat.emissiveNode = diffuseColor.rgb.mul(fresnel(2).mul(1.6).add(0.55));
     this.disposables.push(podGeo, pmat);
     this.podMesh = new THREE.InstancedMesh(podGeo, pmat, Math.max(1, podSites.length));
     this.podMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, podSites.length) * 3), 3);

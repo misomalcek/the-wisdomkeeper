@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { worldTime } from '../engine/materials';
 import type { RunState } from '../types';
 import { STRATA, type Palette, type StratumDef } from '../story/strata';
 import { Rng, hashString } from '../util/rng';
@@ -274,7 +275,7 @@ export class World {
     this.spires = new Spires(R, this.palette, def.id === 'mirror' ? 36 : 54);
     this.group.add(this.spires.mesh);
     this.motes = new Motes(R, def.id === 'mirror' ? 260 : 460, this.palette, def.id !== 'mirror');
-    this.group.add(this.motes.points);
+    this.group.add(this.motes.object);
   }
 
   /** The Return: every echo the player ever left, grown and wired together. */
@@ -311,13 +312,14 @@ export class World {
     this.mycelium.seed(0, 0, 14, 0, 120);
   }
 
-  update(dt: number, t: number, camPos: THREE.Vector3, pointScale: number, player: THREE.Vector3) {
+  update(dt: number, t: number, camPos: THREE.Vector3, _pointScale: number, player: THREE.Vector3) {
+    worldTime.value = t;
     this.terrain.update(t);
     this.flora.update(t);
     this.mycelium.update(dt, t);
     this.grove.update(dt);
     this.sky.update(t, camPos);
-    this.motes.update(t, pointScale);
+    this.motes.update();
     this.gate?.update(dt, t);
     this.mushrooms.update(t);
     this.drift.update(t);

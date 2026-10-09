@@ -1,10 +1,13 @@
 import * as THREE from 'three';
+import { SpriteNodeMaterial } from 'three/webgpu';
+import { instancedBufferAttribute, smoothstep, uv } from 'three/tsl';
+import { glow, type N } from './materials';
 
 const MAX = 5000;
 
-/** One additive Points object holds every spark, spore and shockwave mote in the game. */
+/** One instanced additive billboard batch holds every spark, spore and shockwave mote in the game. */
 export class Particles {
-  readonly points: THREE.Points;
+  readonly sprite: THREE.Sprite;
   private pos = new Float32Array(MAX * 3);
   private col = new Float32Array(MAX * 3);
   private size = new Float32Array(MAX);
@@ -16,44 +19,31 @@ export class Particles {
   private grav = new Float32Array(MAX);
   private baseSize = new Float32Array(MAX);
   private head = 0;
-  private geo = new THREE.BufferGeometry();
-  private mat: THREE.ShaderMaterial;
+  private attrs: THREE.InstancedBufferAttribute[];
 
   constructor() {
-    this.geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3));
-    this.geo.setAttribute('aColor', new THREE.BufferAttribute(this.col, 3));
-    this.geo.setAttribute('aSize', new THREE.BufferAttribute(this.size, 1));
-    this.geo.setAttribute('aAlpha', new THREE.BufferAttribute(this.alpha, 1));
-    this.mat = new THREE.ShaderMaterial({
-      uniforms: { uScale: { value: 800 } },
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      vertexShader: /* glsl */ `
-        attribute vec3 aColor; attribute float aSize; attribute float aAlpha;
-        uniform float uScale; varying vec3 vC; varying float vA;
-        void main(){
-          vec4 mv = modelViewMatrix * vec4(position, 1.0);
-          gl_PointSize = aSize * uScale / max(-mv.z, 0.1);
-          gl_Position = projectionMatrix * mv;
-          vC = aColor; vA = aAlpha;
-        }`,
-      fragmentShader: /* glsl */ `
-        varying vec3 vC; varying float vA;
-        void main(){
-          float d = length(gl_PointCoord - 0.5);
-          float a = smoothstep(0.5, 0.05, d);
-          gl_FragColor = vec4(vC * vA, a * vA);
-        }`,
-    });
-    this.points = new THREE.Points(this.geo, this.mat);
-    this.points.frustumCulled = false;
-    this.points.renderOrder = 10;
+    const aPos = new THREE.InstancedBufferAttribute(this.pos, 3);
+    const aCol = new THREE.InstancedBufferAttribute(this.col, 3);
+    const aSize = new THREE.InstancedBufferAttribute(this.size, 1);
+    const aAlpha = new THREE.InstancedBufferAttribute(this.alpha, 1);
+    this.attrs = [aPos, aCol, aSize, aAlpha];
+    for (const at of this.attrs) at.setUsage(THREE.DynamicDrawUsage);
+    const alpha: N = instancedBufferAttribute(aAlpha);
+    const m = new SpriteNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
+    m.positionNode = instancedBufferAttribute(aPos);
+    m.scaleNode = instancedBufferAttribute(aSize);
+    const disc = smoothstep(0.5, 0.05, uv().sub(0.5).length());
+    m.colorNode = (instancedBufferAttribute(aCol) as N).mul(alpha);
+    m.opacityNode = disc.mul(alpha);
+    glow(m);
+    this.sprite = new THREE.Sprite(m);
+    this.sprite.count = MAX;
+    this.sprite.frustumCulled = false;
+    this.sprite.renderOrder = 10;
   }
 
-  setScale(s: number) {
-    this.mat.uniforms.uScale.value = s;
-  }
+  /** Kept for API compatibility: billboards are world-sized, so no pixel scale is needed. */
+  setScale(_s: number) {}
 
   emit(
     x: number, y: number, z: number, vx: number, vy: number, vz: number,
@@ -114,10 +104,7 @@ export class Particles {
       this.alpha[i] = Math.min(1, f * 1.6);
       this.size[i] = this.baseSize[i] * (0.4 + f * 0.6);
     }
-    this.geo.attributes.position.needsUpdate = true;
-    this.geo.attributes.aColor.needsUpdate = true;
-    this.geo.attributes.aSize.needsUpdate = true;
-    this.geo.attributes.aAlpha.needsUpdate = true;
+    for (const at of this.attrs) at.needsUpdate = true;
   }
 
   clear() {

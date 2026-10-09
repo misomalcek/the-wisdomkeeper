@@ -1,4 +1,10 @@
 import * as THREE from 'three';
+import { MeshStandardNodeMaterial } from 'three/webgpu';
+import {
+  Fn, Loop, uniform, uniformArray, attribute, positionWorld, positionView, normalWorld, float, vec2, vec3, color, mix, sin,
+  fract, abs, max, min, clamp, fwidth, exp, dot, distance, atan, smoothstep as sstep, pow,
+} from 'three/tsl';
+import { worldTime, fbm2, conduction, type N } from '../engine/materials';
 import { fbm, makeNoise2D, type Noise2D } from '../util/rng';
 import { smoothstep } from '../util/math';
 import type { Palette } from '../story/strata';
@@ -32,7 +38,7 @@ export class Terrain {
   private riverF: number;
   private riverP: number;
   private riverW: number;
-  readonly uniforms: Record<string, THREE.IUniform>;
+  private u: Record<string, N>;
   private lightArr: THREE.Vector4[] = Array.from({ length: MAX_LIGHTS }, () => new THREE.Vector4(0, -9999, 0, 0));
   private corruptArr: THREE.Vector4[] = Array.from({ length: MAX_CORRUPT }, () => new THREE.Vector4(0, 0, 1, 0));
 
@@ -64,118 +70,118 @@ export class Terrain {
     geo.deleteAttribute('uv');
 
     const c = (hex: number) => new THREE.Color(hex);
-    this.uniforms = {
-      uTime: { value: 0 },
-      uBase: { value: c(o.palette.groundBase) },
-      uHigh: { value: c(o.palette.groundHigh) },
-      uAccent: { value: c(o.palette.accent) },
-      uAccent2: { value: c(o.palette.accent2) },
-      uRiver: { value: c(o.palette.river) },
-      uFogColor: { value: c(o.palette.fog) },
-      uFogDensity: { value: o.palette.fogDensity },
-      uGrid: { value: o.grid },
-      uRadius: { value: o.radius },
-      uLights: { value: this.lightArr },
-      uCorrupt: { value: this.corruptArr },
-      uNull: { value: new THREE.Color(0xff3b7a) },
-      uStream: { value: o.grid > 0.8 ? 0.35 : 1 },
+    this.u = {
+      base: uniform(c(o.palette.groundBase)),
+      high: uniform(c(o.palette.groundHigh)),
+      accent: uniform(c(o.palette.accent)),
+      accent2: uniform(c(o.palette.accent2)),
+      river: uniform(c(o.palette.river)),
+      grid: uniform(o.grid),
+      radius: uniform(o.radius),
+      stream: uniform(o.grid > 0.8 ? 0.35 : 1),
+      nullCol: uniform(new THREE.Color(0xff0055)),
+    };
+    this.mesh = new THREE.Mesh(geo, this.buildMaterial());
+    this.mesh.receiveShadow = true;
+    this.mesh.frustumCulled = false;
+  }
+
+  /**
+   * Ground as a lit PBR node material. Albedo carries height/slope banding and Null staining (the blueprint
+   * Corrosion mask also drives roughness/metalness); emission carries the circuit grid, data streams,
+   * footfall conduction, corruption veins, the river of light and the arena rim — and only emission blooms.
+   */
+  private buildMaterial() {
+    const u = this.u;
+    const lights = uniformArray(this.lightArr, 'vec4');
+    const corrupt = uniformArray(this.corruptArr, 'vec4');
+    const riverAttr = attribute('aRiver', 'float');
+    const w = positionWorld;
+    const dist = positionView.length();
+    const t = worldTime;
+    const m = new MeshStandardNodeMaterial();
+
+    const gridLine = (scale: number) => {
+      const q = w.xz.mul(scale);
+      const g = abs(fract(q.sub(0.5)).sub(0.5)).div(max(fwidth(q), vec2(1e-4)));
+      return float(1).sub(clamp(min(g.x, g.y), 0, 1));
     };
 
-    const mat = new THREE.ShaderMaterial({
-      uniforms: this.uniforms,
-      vertexShader: /* glsl */ `
-        attribute float aRiver;
-        varying vec3 vWorld; varying vec3 vN; varying float vRiver; varying float vDist;
-        void main(){
-          vec4 w = modelMatrix * vec4(position, 1.0);
-          vWorld = w.xyz; vN = normalize(normalMatrix * normal); vRiver = aRiver;
-          vec4 mv = viewMatrix * w; vDist = length(mv.xyz);
-          gl_Position = projectionMatrix * mv;
-        }`,
-      fragmentShader: /* glsl */ `
-        #define NL ${MAX_LIGHTS}
-        #define NC ${MAX_CORRUPT}
-        uniform vec4 uCorrupt[NC]; uniform vec3 uNull; uniform float uStream;
-        uniform float uTime; uniform vec3 uBase, uHigh, uAccent, uAccent2, uRiver, uFogColor;
-        uniform float uFogDensity, uGrid, uRadius; uniform vec4 uLights[NL];
-        varying vec3 vWorld; varying vec3 vN; varying float vRiver; varying float vDist;
-        float gridLine(vec2 p, float scale){
-          vec2 q = p * scale;
-          vec2 g = abs(fract(q - 0.5) - 0.5) / max(fwidth(q), vec2(1e-4));
-          return 1.0 - clamp(min(g.x, g.y), 0.0, 1.0);
-        }
-        void main(){
-          vec3 n = normalize(vN);
-          float diff = clamp(dot(n, normalize(vec3(0.35, 1.0, 0.25))), 0.0, 1.0);
-          float h = smoothstep(-2.0, 7.0, vWorld.y);
-          vec3 col = mix(uBase, uHigh, h) * (0.45 + 0.75 * diff);
-
-          float glow = 0.0;
-          for (int i = 0; i < NL; i++) {
-            vec4 L = uLights[i];
-            vec2 d = vWorld.xz - L.xz;
-            glow += L.w * exp(-dot(d, d) / (L.y > -9000.0 ? 90.0 : 1.0));
-          }
-          glow = clamp(glow, 0.0, 1.6);
-
-          // eye-level ground detail: soft mottling so the ground never reads as flat colour
-          float mott = sin(vWorld.x * 0.37 + sin(vWorld.z * 0.23) * 2.0) * sin(vWorld.z * 0.31 + sin(vWorld.x * 0.19) * 2.0);
-          col *= 0.8 + 0.35 * mott * mott + 0.1 * sin(vWorld.x * 1.7) * sin(vWorld.z * 1.9);
-
-          float g1 = gridLine(vWorld.xz, 0.25);
-          float g2 = gridLine(vWorld.xz, 0.05);
-          float fade = 1.0 - smoothstep(26.0, 70.0, vDist);
-          float lines = (g1 * 0.35 + g2 * 0.9) * uGrid * (0.3 + glow * 1.5) * fade;
-          col += mix(uAccent, uAccent2, 0.5 + 0.5 * sin(vWorld.x * 0.05 + uTime * 0.2)) * lines;
-          col += uAccent * glow * 0.05 * (0.4 + diff);
-
-          // bioluminescent data streams threading the ground, pulsing along their length
-          {
-            float w1 = vWorld.x * 0.11 + sin(vWorld.z * 0.07) * 3.0 + sin(vWorld.z * 0.19 + 1.3) * 1.3;
-            float w2 = vWorld.z * 0.09 + sin(vWorld.x * 0.08 + 2.0) * 2.6 + sin(vWorld.x * 0.21) * 1.1;
-            float l1 = smoothstep(0.045, 0.0, abs(fract(w1) - 0.5)) * (0.5 + 0.5 * sin(vWorld.z * 0.9 - uTime * 2.2 + w1 * 6.0));
-            float l2 = smoothstep(0.04, 0.0, abs(fract(w2) - 0.5)) * (0.5 + 0.5 * sin(vWorld.x * 0.8 + uTime * 1.9 + w2 * 5.0));
-            float nearF = 1.0 - smoothstep(35.0, 95.0, vDist);
-            col += mix(uAccent, uAccent2, 0.5 + 0.5 * sin(w1)) * (l1 + l2 * 0.7) * 0.5 * uStream * nearF;
-          }
-
-          // Null corruption: stained ground with creeping veins around enemy camps
-          float cor = 0.0;
-          for (int i = 0; i < NC; i++) {
-            vec4 C = uCorrupt[i];
-            float d = distance(vWorld.xz, C.xy);
-            float wob = 1.0 + 0.18 * sin(atan(vWorld.z - C.y, vWorld.x - C.x) * 5.0 + uTime * 0.4);
-            cor = max(cor, (1.0 - smoothstep(C.z * 0.55 * wob, C.z * wob, d)) * C.w);
-          }
-          if (cor > 0.001) {
-            float vv = abs(sin(vWorld.x * 0.9 + sin(vWorld.z * 0.7 + uTime * 0.3) * 2.2)) * abs(sin(vWorld.z * 0.8 + sin(vWorld.x * 0.5) * 1.7));
-            float veins = pow(1.0 - vv, 9.0);
-            float pulse = 0.6 + 0.4 * sin(uTime * 1.6 + vWorld.x * 0.1);
-            col = mix(col, vec3(0.05, 0.015, 0.04), cor * 0.7);
-            col += uNull * (veins * 0.75 * pulse + 0.03) * cor;
-          }
-
-          // river of light
-          if (vRiver > 0.001) {
-            float flow = sin(vWorld.z * 0.7 - uTime * 2.2 + sin(vWorld.x * 0.6) * 1.5) * 0.5 + 0.5;
-            float flow2 = sin(vWorld.z * 1.9 - uTime * 3.4 + vWorld.x * 0.8) * 0.5 + 0.5;
-            vec3 rc = uRiver * (0.55 + 0.9 * flow * flow2) + uAccent2 * 0.12 * glow;
-            col = mix(col, rc, smoothstep(0.0, 0.7, vRiver));
-          }
-
-          // arena rim: a thin bright seam where the playable bowl ends
-          float r = length(vWorld.xz);
-          float rd = abs(r - uRadius);
-          float rim = (1.0 - smoothstep(0.0, 0.35, rd)) * (0.55 + 0.45 * sin(atan(vWorld.z, vWorld.x) * 40.0 + uTime));
-          col += uAccent2 * rim * 0.45 + uAccent2 * exp(-rd * rd * 0.08) * 0.05;
-
-          float fog = 1.0 - exp(-uFogDensity * uFogDensity * vDist * vDist);
-          col = mix(col, uFogColor, clamp(fog, 0.0, 1.0));
-          gl_FragColor = vec4(col, 1.0);
-        }`,
+    const glowF = Fn(() => {
+      const acc = float(0).toVar();
+      Loop(MAX_LIGHTS, ({ i }: { i: N }) => {
+        const L: N = lights.element(i);
+        const d = w.xz.sub(L.xz);
+        acc.addAssign(L.w.mul(exp(dot(d, d).negate().div(90))));
+      });
+      return clamp(acc, 0, 1.6);
     });
-    this.mesh = new THREE.Mesh(geo, mat);
-    this.mesh.frustumCulled = false;
+    const corF = Fn(() => {
+      const acc = float(0).toVar();
+      Loop(MAX_CORRUPT, ({ i }: { i: N }) => {
+        const C: N = corrupt.element(i);
+        const d = distance(w.xz, C.xy);
+        const wob = float(1).add(sin(atan(w.z.sub(C.y), w.x.sub(C.x)).mul(5).add(t.mul(0.4))).mul(0.18));
+        acc.assign(max(acc, float(1).sub(sstep(C.z.mul(0.55).mul(wob), C.z.mul(wob), d)).mul(C.w)));
+      });
+      return acc;
+    });
+    const glow: N = glowF();
+    const cor: N = corF();
+
+    // ---- albedo: height banding, slope rock, eye-level mottling, Null stain
+    const h = sstep(-2, 7, w.y);
+    const slope = sstep(0.92, 0.72, normalWorld.y);
+    const mott = sin(w.x.mul(0.37).add(sin(w.z.mul(0.23)).mul(2))).mul(sin(w.z.mul(0.31).add(sin(w.x.mul(0.19)).mul(2))));
+    const grain = fbm2(w.xz.mul(0.45));
+    let albedo: N = mix(u.base, u.high, h);
+    albedo = mix(albedo, u.base.mul(0.55).add(vec3(0.03, 0.03, 0.035)), slope.mul(0.75));
+    albedo = albedo.mul(mott.mul(mott).mul(0.35).add(0.8).add(grain.sub(0.5).mul(0.35)));
+    albedo = mix(albedo, color(0x0a0003), cor.mul(0.75));
+
+    // ---- emission
+    const fadeNear = float(1).sub(sstep(26, 70, dist));
+    const lines = gridLine(0.25).mul(0.35).add(gridLine(0.05).mul(0.9)).mul(u.grid).mul(glow.mul(1.5).add(0.3)).mul(fadeNear);
+    let emit: N = mix(u.accent, u.accent2, sin(w.x.mul(0.05).add(t.mul(0.2))).mul(0.5).add(0.5)).mul(lines);
+    emit = emit.add(u.accent.mul(glow).mul(0.05));
+
+    // bioluminescent data streams threading the ground, pulsing along their length
+    const w1 = w.x.mul(0.11).add(sin(w.z.mul(0.07)).mul(3)).add(sin(w.z.mul(0.19).add(1.3)).mul(1.3));
+    const w2 = w.z.mul(0.09).add(sin(w.x.mul(0.08).add(2)).mul(2.6)).add(sin(w.x.mul(0.21)).mul(1.1));
+    const f1 = sstep(0.045, 0, abs(fract(w1).sub(0.5)));
+    const f2 = sstep(0.04, 0, abs(fract(w2).sub(0.5)));
+    const l1 = f1.mul(sin(w.z.mul(0.9).sub(t.mul(2.2)).add(w1.mul(6))).mul(0.5).add(0.5));
+    const l2 = f2.mul(sin(w.x.mul(0.8).add(t.mul(1.9)).add(w2.mul(5))).mul(0.5).add(0.5));
+    const nearF = float(1).sub(sstep(35, 95, dist));
+    emit = emit.add(mix(u.accent, u.accent2, sin(w1).mul(0.5).add(0.5)).mul(l1.add(l2.mul(0.7))).mul(0.5).mul(u.stream).mul(nearF));
+    // footfalls conduct along the filaments (Fractal-Neural "Terrain Conduction Interface")
+    emit = emit.add(conduction(vec3(0), color(0x3a6bff), max(f1, f2).add(lines.mul(0.5))).mul(float(1).sub(cor)));
+
+    // Null corruption: creeping veins
+    const vv = abs(sin(w.x.mul(0.9).add(sin(w.z.mul(0.7).add(t.mul(0.3))).mul(2.2)))).mul(abs(sin(w.z.mul(0.8).add(sin(w.x.mul(0.5)).mul(1.7)))));
+    const veins = pow(float(1).sub(vv), float(9));
+    const cpulse = sin(t.mul(1.6).add(w.x.mul(0.1))).mul(0.4).add(0.6);
+    emit = mix(emit, emit.mul(0.25), cor).add(u.nullCol.mul(veins.mul(0.75).mul(cpulse).add(0.03)).mul(cor));
+
+    // river of light
+    const flow = sin(w.z.mul(0.7).sub(t.mul(2.2)).add(sin(w.x.mul(0.6)).mul(1.5))).mul(0.5).add(0.5);
+    const flow2 = sin(w.z.mul(1.9).sub(t.mul(3.4)).add(w.x.mul(0.8))).mul(0.5).add(0.5);
+    const rk = sstep(0, 0.7, riverAttr);
+    const rc = u.river.mul(flow.mul(flow2).mul(0.9).add(0.55)).add(u.accent2.mul(0.12).mul(glow));
+    emit = mix(emit, rc, rk);
+    albedo = mix(albedo, u.river.mul(0.25), rk);
+
+    // arena rim: a thin bright seam where the playable bowl ends
+    const r = w.xz.length();
+    const rd = abs(r.sub(u.radius));
+    const rim = float(1).sub(sstep(0, 0.35, rd)).mul(sin(atan(w.z, w.x).mul(40).add(t)).mul(0.45).add(0.55));
+    emit = emit.add(u.accent2.mul(rim).mul(0.45)).add(u.accent2.mul(exp(rd.mul(rd).mul(-0.08))).mul(0.05));
+
+    m.colorNode = albedo;
+    m.emissiveNode = emit;
+    m.roughnessNode = mix(float(0.86).sub(grain.mul(0.12)), float(0.4), max(cor, rk.mul(0.9)));
+    m.metalnessNode = mix(float(0.05), float(0.55), cor);
+    return m;
   }
 
   private centerX(z: number) {
@@ -239,9 +245,7 @@ export class Terrain {
     for (let k = i; k < MAX_LIGHTS; k++) this.lightArr[k].set(0, -9999, 0, 0);
   }
 
-  update(t: number) {
-    this.uniforms.uTime.value = t;
-  }
+  update(_t: number) {}
 
   dispose() {
     this.mesh.geometry.dispose();
