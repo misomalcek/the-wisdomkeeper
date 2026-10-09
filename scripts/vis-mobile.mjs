@@ -1,0 +1,25 @@
+import { serve } from './harness.mjs';
+import { chromium } from 'playwright-core';
+import path from 'node:path';
+const server = await serve(path.resolve('dist'));
+const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+const ctx = await b.newContext({ viewport: { width: 844, height: 390 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
+const p = await ctx.newPage();
+const logs = [];
+p.on('console', (m) => ['error', 'warning'].includes(m.type()) && logs.push(m.text()));
+p.on('pageerror', (e) => logs.push(e.message));
+await p.goto('http://127.0.0.1:4173/?debug&scale=0.6&nobloom');
+await p.waitForTimeout(2500);
+await p.screenshot({ path: 'shots/m-title.png' });
+await p.evaluate(() => { const g = window.__wk; g.debugGoto(1); });
+await p.waitForTimeout(6500);
+await p.screenshot({ path: 'shots/m-play.png' });
+// open inventory + binary choice at phone size
+await p.evaluate(() => { const g = window.__wk; g.dropLoot(g.player.x, g.player.z, 'embrace'); g.debugStep(40); g.openOverlay('inventory'); });
+await p.waitForTimeout(1200);
+await p.screenshot({ path: 'shots/m-inv.png' });
+await p.evaluate(() => { const g = window.__wk; g.ui.hide('inventory'); g.paused = false; const n = g.world.nodes[0]; g.debugClearCamps(); n.setState('dormant'); g.completeNode(n); });
+await p.waitForTimeout(1200);
+await p.screenshot({ path: 'shots/m-binary.png' });
+console.log(logs.join('\n') || 'no console errors');
+await b.close(); server.close();

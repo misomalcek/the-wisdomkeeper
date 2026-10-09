@@ -1,0 +1,26 @@
+{
+  "name": "the-wisdomkeeper",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Wisdomkeeper \u2014 the Infinite Story Engine. A third-person cyber-phyto-mycelial open-world action RPG in Three.js.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "test": "vitest run",
+    "test:systems": "npm run build && node scripts/systems-test.mjs",
+    "sim": "npm run build && node scripts/sim-full.mjs 0.7 45"
+  },
+  "dependencies": {
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0",
+    "playwright-core": "^1.64.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.3"
+  }
+}

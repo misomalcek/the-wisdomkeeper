@@ -1,0 +1,12 @@
+import { launch } from './harness.mjs';
+const { browser, page, logs } = await launch({ width: 1000, height: 600 });
+const failed = [];
+page.on('requestfailed', (r) => failed.push(r.url()));
+page.on('response', (r) => { if (r.status() >= 400) failed.push(`${r.status()} ${r.url()}`); });
+await page.goto('http://127.0.0.1:4180/the-wisdomkeeper/?scale=0.5&nobloom');
+await page.waitForTimeout(3500);
+const ok = await page.evaluate(() => ({ canvas: !!document.getElementById('game-canvas'), title: !document.getElementById('title').classList.contains('hidden'), w: document.getElementById('game-canvas').width }));
+console.log('boot', JSON.stringify(ok));
+console.log('failed requests:', failed.length ? failed.join('\n') : 'none');
+console.log(logs.join('\n') || 'no console errors');
+await browser.close();

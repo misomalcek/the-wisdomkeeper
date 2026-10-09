@@ -1,0 +1,10 @@
+import { serve, launch } from './harness.mjs';
+import path from 'node:path';
+const dist = path.resolve('dist');
+const server = await serve(dist);
+const { browser, page, logs } = await launch();
+await page.goto('http://127.0.0.1:4173/?debug');
+await page.waitForTimeout(6000);
+await page.screenshot({ path: 'shots/title.png' });
+console.log(logs.join('\n') || 'no console errors');
+await browser.close(); server.close();
