@@ -11,6 +11,18 @@ import { FractalGate, MemoryNode, Pylon, SporeCache } from './structures';
 import { Motes, Sky, Spires } from './atmosphere';
 import { EchoGrove } from '../entities/echoes';
 import { Colliders } from './colliders';
+import { Physics } from '../physics/physics';
+import { DriftField, MushroomGroves, type TetherAnchor } from './traversal';
+import { Props } from './props';
+
+/** How much traversal furniture each region gets. */
+const TRAVERSAL: Record<string, { mush: number; drift: number; crystals: number; pods: number }> = {
+  seedbed: { mush: 2, drift: 1, crystals: 4, pods: 10 },
+  river: { mush: 3, drift: 2, crystals: 4, pods: 14 },
+  canopy: { mush: 5, drift: 3, crystals: 5, pods: 14 },
+  mirror: { mush: 1, drift: 3, crystals: 14, pods: 6 },
+  return: { mush: 3, drift: 2, crystals: 3, pods: 10 },
+};
 
 function shiftPalette(p: Palette, hue: number): Palette {
   if (Math.abs(hue) < 0.001) return p;
@@ -48,6 +60,11 @@ export class World {
   readonly spires: Spires;
   readonly motes: Motes;
   readonly colliders = new Colliders();
+  readonly physics: Physics;
+  readonly mushrooms: MushroomGroves;
+  readonly drift: DriftField;
+  readonly props: Props;
+  readonly tetherAnchors: TetherAnchor[] = [];
   readonly nodes: MemoryNode[] = [];
   readonly pylons: Pylon[] = [];
   readonly caches: SporeCache[] = [];
@@ -78,6 +95,8 @@ export class World {
       grid: def.id === 'mirror' ? 0.9 : def.id === 'return' ? 0.35 : 0.6,
     });
     this.group.add(this.terrain.mesh);
+    this.physics = new Physics((x, z) => this.terrain.heightAt(x, z));
+    this.colliders.onAdd = (x, z, r) => this.physics.addPillar(x, z, r);
 
     // ---- layout -----------------------------------------------------------------------
     const R = this.radius;
@@ -163,15 +182,53 @@ export class World {
     }
     this.camps.push(...campXZ);
 
+    // traversal furniture: mushroom stairs, drifting platforms, crystal clusters, spore pods
+    const tv = TRAVERSAL[def.id] ?? TRAVERSAL.seedbed;
+    const mushXZ: THREE.Vector2[] = [];
+    for (let i = 0; i < tv.mush; i++) {
+      const p = scatter(R * 0.16, 0.78);
+      if (p) {
+        mushXZ.push(p);
+        pois.push(p);
+      }
+    }
+    const driftXZ: THREE.Vector2[] = [];
+    for (let i = 0; i < tv.drift; i++) {
+      const p = scatter(R * 0.12, 0.7);
+      if (p) driftXZ.push(p);
+    }
+    const crystalXZ: THREE.Vector2[] = [];
+    for (let i = 0; i < tv.crystals; i++) {
+      const p = scatter(9, 0.85);
+      if (p) {
+        crystalXZ.push(p);
+        pois.push(p);
+      }
+    }
+    const podXZ: THREE.Vector2[] = [];
+    for (let i = 0; i < tv.pods; i++) {
+      const p = scatter(5, 0.8);
+      if (p) podXZ.push(p);
+    }
+
     const avoid = [
       { x: startXZ.x, z: startXZ.y, r: 8 },
       { x: gateXZ.x, z: gateXZ.y, r: 10 },
       ...nodeXZ.map((p) => ({ x: p.x, z: p.y, r: 8 })),
       ...pylonXZ.map((p) => ({ x: p.x, z: p.y, r: 9 })),
       ...cachesXZ.map((p) => ({ x: p.x, z: p.y, r: 3 })),
+      ...mushXZ.map((p) => ({ x: p.x, z: p.y, r: 8.5 })),
+      ...crystalXZ.map((p) => ({ x: p.x, z: p.y, r: 2.5 })),
     ];
     this.flora = buildFlora(def, this.terrain, rng.fork('flora'), params.floraDensity, avoid, this.colliders, campXZ.map((c) => ({ x: c.x, z: c.z, r: c.r })));
     this.group.add(this.flora.group);
+
+    const vec = (l: THREE.Vector2[]) => l.map((p) => ({ x: p.x, z: p.y }));
+    this.mushrooms = new MushroomGroves(this.terrain, this.physics, rng.fork('mush'), this.palette, vec(mushXZ));
+    this.drift = new DriftField(this.terrain, this.physics, rng.fork('drift'), this.palette, vec(driftXZ));
+    this.props = new Props(this.physics, this.terrain, rng.fork('props'), this.palette, vec(crystalXZ), vec(podXZ));
+    this.group.add(this.mushrooms.group, this.drift.group, this.props.group);
+    this.tetherAnchors.push(...this.mushrooms.anchors, ...this.drift.anchors);
 
     this.mycelium = new Mycelium(this.terrain, rng.fork('myc'), this.palette);
     this.group.add(this.mycelium.lines);
@@ -189,6 +246,7 @@ export class World {
       const py = new Pylon(this.palette, this.terrain, p.x, p.y, i);
       this.pylons.push(py);
       this.group.add(py.group);
+      this.tetherAnchors.push({ pos: py.pos.clone().setY(py.pos.y + 7.5), label: 'Pylon' });
       this.mycelium.addTarget(p.x, p.y);
       this.colliders.add(p.x, p.y, 3.8);
     });
@@ -261,6 +319,9 @@ export class World {
     this.sky.update(t, camPos);
     this.motes.update(t, pointScale);
     this.gate?.update(dt, t);
+    this.mushrooms.update(t);
+    this.drift.update(t);
+    this.props.update(t);
     for (const n of this.nodes) n.update(dt, t);
     for (const p of this.pylons) p.update(dt, t);
     for (const c of this.caches) c.update(dt, t);
@@ -337,6 +398,10 @@ export class World {
     this.nodes.forEach((n) => n.dispose());
     this.pylons.forEach((n) => n.dispose());
     this.caches.forEach((n) => n.dispose());
+    this.mushrooms.dispose();
+    this.drift.dispose();
+    this.props.dispose();
+    this.physics.dispose();
   }
 }
 

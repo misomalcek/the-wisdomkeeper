@@ -3,7 +3,7 @@ import type { Game } from '../game';
 import type { Item } from '../types';
 import { RARITY } from '../systems/progress';
 
-export type PickupKind = 'heal' | 'res' | 'gear';
+export type PickupKind = 'heal' | 'res' | 'gear' | 'fiber';
 interface Pickup {
   kind: PickupKind;
   x: number; z: number; y: number;
@@ -12,6 +12,8 @@ interface Pickup {
   phase: number;
   item?: Item;
   color?: THREE.Color;
+  /** Hover height for pickups placed on platforms (otherwise they follow the terrain). */
+  fixedY?: number;
 }
 
 const MAX = 90;
@@ -19,6 +21,7 @@ const _o = new THREE.Object3D();
 const COL = {
   heal: new THREE.Color(0x7cff6b).multiplyScalar(2.6),
   res: new THREE.Color(0x4fb4ff).multiplyScalar(2.8),
+  fiber: new THREE.Color(0xc2ff7a).multiplyScalar(2.6),
 };
 
 export class Pickups {
@@ -43,8 +46,13 @@ export class Pickups {
     this.group.add(this.mesh, this.beams);
   }
 
-  drop(x: number, z: number, kind: 'heal' | 'res') {
+  drop(x: number, z: number, kind: 'heal' | 'res' | 'fiber') {
     this.push({ kind, x, z, y: 0, vx: (Math.random() - 0.5) * 8, vz: (Math.random() - 0.5) * 8, life: 24, phase: Math.random() * 6 });
+  }
+
+  /** A pickup resting at a fixed height (crown caps, ledges). `life` defaults to the whole visit. */
+  place(x: number, y: number, z: number, kind: 'heal' | 'res' | 'fiber', life = 1e9) {
+    this.push({ kind, x, z, y, vx: 0, vz: 0, life, phase: Math.random() * 6, fixedY: y });
   }
 
   dropGear(x: number, z: number, item: Item) {
@@ -74,15 +82,15 @@ export class Pickups {
       const dy = p.cy - it.y;
       const d = Math.hypot(dx, dz, dy);
       const magnet = it.kind === 'gear' ? 4 : 7;
-      if (d < magnet && !p.dead) {
+      if (d < magnet && !p.dead && it.fixedY === undefined) {
         const pull = (1 - d / magnet) * 40 + 6;
         it.vx += (dx / d) * pull * dt;
         it.vz += (dz / d) * pull * dt;
       }
       it.x += it.vx * dt;
       it.z += it.vz * dt;
-      it.y = terrain.heightAt(it.x, it.z) + 0.9 + Math.sin(game.time * 3 + it.phase) * 0.15;
-      if (d < 1.5 && !p.dead) {
+      it.y = (it.fixedY ?? terrain.heightAt(it.x, it.z)) + 0.9 + Math.sin(game.time * 3 + it.phase) * 0.15;
+      if (d < (it.fixedY === undefined ? 1.5 : 1.9) && !p.dead) {
         game.collect(it.kind, it.item);
         this.items.splice(i, 1);
         continue;
@@ -95,18 +103,18 @@ export class Pickups {
       _o.position.set(it.x, it.y, it.z);
       _o.rotation.set(game.time * 2 + it.phase, game.time * 3, 0);
       const fade = it.life < 3 ? (Math.sin(game.time * 20) > 0 ? 1 : 0.3) : 1;
-      _o.scale.setScalar(fade * (it.kind === 'gear' ? 1.5 : 1));
+      _o.scale.setScalar(fade * (it.kind === 'gear' ? 1.5 : it.fixedY !== undefined ? 1.6 : 1));
       _o.updateMatrix();
       this.mesh.setMatrixAt(n, _o.matrix);
-      this.mesh.setColorAt(n, it.color ?? COL[it.kind as 'heal' | 'res']);
+      this.mesh.setColorAt(n, it.color ?? COL[it.kind as 'heal' | 'res' | 'fiber']);
       n++;
-      if (it.kind === 'gear' && it.item && it.item.rarity !== 'common') {
+      if ((it.kind === 'gear' && it.item && it.item.rarity !== 'common') || (it.fixedY !== undefined && it.kind === 'fiber')) {
         _o.position.set(it.x, it.y - 0.8, it.z);
         _o.rotation.set(0, 0, 0);
         _o.scale.set(1, 1, 1);
         _o.updateMatrix();
         this.beams.setMatrixAt(b, _o.matrix);
-        this.beams.setColorAt(b, it.color!);
+        this.beams.setColorAt(b, it.color ?? COL.fiber);
         b++;
       }
     }

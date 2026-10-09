@@ -90,6 +90,8 @@ export interface RunState {
   nullPoints: number;
   purityPoints: number;
   remembrances: Remembrance[];
+  /** Mycelial Fiber carried between regions (flight/levitation fuel). Optional for older saves. */
+  fiber?: number;
 }
 
 export interface LibraryEntry {

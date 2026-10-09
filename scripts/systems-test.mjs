@@ -42,10 +42,10 @@ const fresh = async (stratum = 0) => {
     p.res = 100;
     g.input.press('Space'); g.debugStep(8); out.jumped = p.y - t.heightAt(p.x, p.z) > 0.3;
     g.debugStep(60);
-    g.input.press('KeyV'); g.debugStep(2); out.flight = p.mode;
+    g.input.press('KeyV'); g.debugStep(2); out.flight = p.mode; const fuel0 = p.fuel;
     g.cam.pitch = -0.25; g.input.touchMove.set(0, -1); const y0 = p.y; g.debugStep(60); out.climbed = p.y - y0;
     g.input.touchMove.set(0, 0);
-    out.drain = 100 - p.res;
+    out.drain = fuel0 - p.fuel;
     g.input.press('KeyV'); g.debugStep(60); out.after = p.mode;
     g.debugStep(200);
     out.landed = p.mode === 'ground';
@@ -60,7 +60,7 @@ const fresh = async (stratum = 0) => {
   check('jump leaves the ground', r.jumped);
   check('V ignites free flight', r.flight === 'flight', r.flight);
   check('flight follows the camera pitch (climbs)', r.climbed > 3, `climbed=${r.climbed.toFixed(1)}`);
-  check('flight drains Resonance', r.drain > 3, `drain=${r.drain.toFixed(1)}`);
+  check('flight burns fuel (fiber, then Resonance)', r.drain > 3, `drain=${r.drain.toFixed(1)}`);
   check('V again drops out of flight', r.after !== 'flight', r.after);
   check('hero lands back on the ground', r.landed);
   check('the river of light levitates the hero', r.river === 'levitate' && r.hover > 0.8, `${r.river} h=${r.hover.toFixed(2)}`);

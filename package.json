@@ -2,7 +2,7 @@
   "name": "the-wisdomkeeper",
   "private": true,
   "version": "1.0.0",
-  "description": "Wisdomkeeper \u2014 the Infinite Story Engine. A third-person cyber-phyto-mycelial open-world action RPG in Three.js.",
+  "description": "Wisdomkeeper — the Infinite Story Engine. A third-person cyber-phyto-mycelial open-world action RPG in Three.js.",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,6 +14,7 @@
     "sim": "npm run build && node scripts/sim-full.mjs 0.7 45"
   },
   "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.21.0",
     "three": "^0.186.1"
   },
   "devDependencies": {

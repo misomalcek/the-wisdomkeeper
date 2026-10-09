@@ -1,9 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { initPhysics } from '../src/physics/physics';
 import { STRATA } from '../src/story/strata';
 import { World } from '../src/world/world';
 import { emptyTiers } from '../src/story/story';
 import type { RunState } from '../src/types';
 import { Rng } from '../src/util/rng';
+
+beforeAll(async () => {
+  await initPhysics();
+});
 
 const mkRun = (seed: number, latent: number[]): RunState => ({
   version: 2, cycle: 1, seed, stratumIndex: 0, tiers: emptyTiers(), history: [], echoes: [],

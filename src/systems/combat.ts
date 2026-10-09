@@ -9,6 +9,8 @@ import { AFFINITY_COLOR } from '../entities/echoes';
 import { angleDiff, clamp } from '../util/math';
 
 const HOT = new THREE.Color(0xff3b7a);
+const ROCK = new THREE.Color(0x30343c);
+const VOIDBARK = new THREE.Color(0x2a1830);
 const _v = new THREE.Vector3();
 const _p = new THREE.Vector3();
 
@@ -100,6 +102,9 @@ export class Combat {
     const half = idx === 2 ? Math.PI : tiers.echo >= 2 ? 1.2 : 0.95;
     const dmg = (idx === 2 ? 46 : 26) * D.dmgMul;
     this.strike(p.x, p.y, p.z, this.swingYaw, reach, half, dmg, idx === 2, false);
+    const sx = Math.sin(this.swingYaw);
+    const sz = Math.cos(this.swingYaw);
+    g.strikeProps(p.x + sx * reach * 0.55, p.y + 0.9, p.z + sz * reach * 0.55, reach * (half > 2 ? 1 : 0.6), dmg, idx === 2 ? 12 : 7, sx, sz);
     const col = this.affinityColor();
     this.fx.swing(p.x, p.y + 0.9, p.z, this.swingYaw, reach * 0.95, half, col);
     this.sweepParticles(p.x, p.y + 1, p.z, this.swingYaw, reach, half, col);
@@ -229,6 +234,10 @@ export class Combat {
     g.particles.ring(pos, new THREE.Color(0x5cffc1).multiplyScalar(2), 14, 8, 0.4, 0.6);
     g.audio.sfx('kill', e.kind === 'brute' ? 0.6 : 1);
     g.shake(e.kind === 'brute' ? 0.5 : 0.1);
+    if (e.kind === 'brute' || e.kind === 'boss') {
+      g.world.props.debris.burst('rubble', e.x, e.y + 1, e.z, e.kind === 'boss' ? 26 : 12, 8, VOIDBARK, e.kind === 'boss' ? 2.2 : 1.4);
+      g.world.props.debris.burst('shard', e.x, e.y + 1.5, e.z, 8, 9, HOT, 1.2);
+    }
     g.gainXp(enemyXp(e.kind));
     g.onEnemyKilled(e);
     if (e.kind === 'boss') {
@@ -368,6 +377,7 @@ export class Combat {
       }
     }
     g.projectiles.clearEnemyBolts();
+    g.strikeProps(p.x, p.y + 1, p.z, radius * 0.7, 25, 14);
     g.world.mycelium.seed(p.x, p.z, 14, 0, 70);
     if (tiers.root >= 3) {
       for (let i = 0; i < 3; i++) {
@@ -422,6 +432,8 @@ export class Combat {
       if (j.t > 0) continue;
       this.jobs.splice(i, 1);
       g.particles.burst(_v.set(j.x, g.world.terrain.heightAt(j.x, j.z) + 0.3, j.z), new THREE.Color(0x9bff6b).multiplyScalar(2.2), 8, 6, 0.4, 0.5);
+      g.strikeProps(j.x, g.world.terrain.heightAt(j.x, j.z) + 0.5, j.z, 1.8, j.dmg, 11);
+      if (Math.random() < 0.5) g.world.props.debris.burst('rubble', j.x, g.world.terrain.heightAt(j.x, j.z) + 0.2, j.z, 2, 6, ROCK);
       for (const e of g.enemies) {
         if (e.dead) continue;
         const dx = e.x - j.x;

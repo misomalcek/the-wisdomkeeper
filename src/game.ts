@@ -26,6 +26,10 @@ import { AFFINITY_COLOR } from './entities/echoes';
 import type { MemoryNode, Pylon } from './world/structures';
 import { clamp, damp } from './util/math';
 import { updateOcclusion } from './world/occlusion';
+import { TraversalUI, type TravMode } from './ui/traversal-ui';
+import { MAX_FIBER, TETHER_RANGE } from './entities/player';
+import type { TetherAnchor } from './world/traversal';
+import { LAYER } from './physics/physics';
 
 type Mode = 'title' | 'prologue' | 'play' | 'choice' | 'transition' | 'dead' | 'ending';
 
@@ -83,6 +87,7 @@ export class Game {
   readonly input = new Input();
   readonly audio = new AudioEngine();
   readonly ui = new UI();
+  readonly trav = new TraversalUI();
   readonly particles = new Particles();
   readonly projectiles = new Projectiles();
   readonly pickups = new Pickups();
@@ -134,6 +139,12 @@ export class Game {
   private rayO = new THREE.Vector3();
   private rayD = new THREE.Vector3();
   private tmp = new THREE.Vector3();
+  /** Best tether target under the reticle this frame. */
+  private tetherAim: { point: THREE.Vector3; anchor: TetherAnchor | null; label: string } | null = null;
+  private tetherPoint = new THREE.Vector3();
+  private wheelHold = 0;
+  /** Time scale while the traversal wheel is open. */
+  private slowmo = 1;
 
   constructor(root: HTMLElement) {
     this.gfx = new Gfx(root);
@@ -155,7 +166,7 @@ export class Game {
     });
 
     const scene = this.gfx.scene;
-    scene.add(this.particles.points, this.projectiles.group, this.pickups.group, this.player.group, this.player.blobMesh, this.combat.fx.group);
+    scene.add(this.particles.points, this.projectiles.group, this.pickups.group, this.player.group, this.player.blobMesh, this.combat.fx.group, this.player.tether.mesh);
 
     this.applySettings();
     this.bindUI();
@@ -195,6 +206,7 @@ export class Game {
     });
   }
   saveRun() {
+    this.run.fiber = Math.round(this.player.fiber);
     store.set(SAVE_KEY, this.run);
   }
   private loadRun(): RunState | null {
@@ -416,6 +428,7 @@ export class Game {
     this.gfx.grace = 3.5;
     this.world = new World(def, this.run);
     this.gfx.scene.add(this.world.group);
+    this.world.physics.prime(this.world.startPos.x, this.world.startPos.z);
     this.cam.terrainH = (x, z) => this.world.terrain.heightAt(x, z);
     const p = this.world.palette;
     const lerpC = (a: number, b: number, t: number) => new THREE.Color(a).lerp(new THREE.Color(b), t).getHex();
@@ -482,6 +495,10 @@ export class Game {
     this.refreshDerived();
     this.player.reset(w.startPos.x, w.startPos.y, w.startPos.z, this.derived.maxHp);
     this.player.res = Math.max(this.player.res, 30);
+    this.player.fiber = Math.max(this.run.fiber ?? 0, 20);
+    for (const c of w.mushrooms.crowns) {
+      for (let i = 0; i < 3; i++) this.pickups.place(c.x + Math.cos(i * 2.1) * 1.1, c.y, c.z + Math.sin(i * 2.1) * 1.1, 'fiber');
+    }
     this.player.group.scale.setScalar(1);
     this.player.yaw = Math.atan2(-w.startPos.x, -w.startPos.z);
     this.cam.yaw = this.player.yaw;
@@ -587,6 +604,7 @@ export class Game {
     const w = this.world;
     const cp = this.checkpointPos();
     this.player.reset(cp.x, w.terrain.heightAt(cp.x, cp.z), cp.z, this.derived.maxHp);
+    w.physics.prime(cp.x, cp.z);
     this.player.hp = this.derived.maxHp;
     this.player.res = Math.max(this.player.res, 40);
     for (const e of this.enemies) if (e.kind !== 'boss' && (e.fromEvent || !e.idle)) e.dead = true;
@@ -733,7 +751,7 @@ export class Game {
   // ---------------------------------------------------------------- helpers
 
   private emptyIntent(): Intent {
-    return { mx: 0, mz: 0, jump: false, flightToggle: false, up: false, down: false, boost: false, dash: false, attackPressed: false, attackHeld: false, aim: false };
+    return { mx: 0, mz: 0, jump: false, flightToggle: false, up: false, down: false, boost: false, dash: false, attackPressed: false, attackHeld: false, aim: false, tether: false };
   }
 
   private playerFrame(dt: number, it: Intent) {
@@ -742,6 +760,9 @@ export class Game {
   }
 
   private updateWorldVisuals(dt: number) {
+    const ph = this.world.physics;
+    ph.streamTerrain(this.player.x, this.player.z);
+    ph.step(dt);
     this.time += dt;
     this.world.update(dt, this.time, this.gfx.camera.position, this.gfx.pointScale, this.player.group.position);
     this.particles.update(dt);
@@ -773,6 +794,7 @@ export class Game {
       attackPressed: inp.wasPressed('MouseLeft'),
       attackHeld: inp.attackHeld,
       aim: inp.aimHeld,
+      tether: inp.wasPressed('KeyT'),
     };
   }
 
@@ -844,6 +866,9 @@ export class Game {
   private updatePlay(dt: number) {
     const p = this.player;
     const dead = this.mode === 'dead';
+    this.updateWheel(dt, dead);
+    this.slowmo = damp(this.slowmo, this.trav.isOpen ? 0.22 : 1, 14, dt);
+    dt *= this.slowmo;
     this.stats.time += dt;
     this.run.elapsed += dt;
     this.time += dt;
@@ -851,13 +876,16 @@ export class Game {
 
     // camera look: mouse (pointer lock), touch drag, or arrow keys as a fallback
     const look = this.input.consumeLook(this.look);
-    if (this.input.locked || this.input.lastDevice === 'touch') this.cam.look(look.x, look.y);
+    if (this.trav.isOpen) this.trav.steer(look.x, look.y);
+    else if (this.input.locked || this.input.lastDevice === 'touch') this.cam.look(look.x, look.y);
     const ar = (this.input.isDown('ArrowLeft') ? 1 : 0) - (this.input.isDown('ArrowRight') ? 1 : 0);
     const au = (this.input.isDown('ArrowDown') ? 1 : 0) - (this.input.isDown('ArrowUp') ? 1 : 0);
     if (ar || au) this.cam.look(-ar * dt * 900, au * dt * 700);
 
     this.computeAim();
+    this.computeTetherAim();
     const it = this.buildIntent(dead);
+    if (it.tether && !p.tether.active && !dead) this.tryTether();
     this.playerFrame(dt, it);
     if (!dead) {
       this.handleActions();
@@ -1164,10 +1192,11 @@ export class Game {
     const pos = new THREE.Vector3(p.x, p.y + 1, p.z);
     if (kind === 'heal') p.hp = Math.min(this.derived.maxHp, p.hp + 12);
     else if (kind === 'res') p.res = Math.min(this.derived.maxRes, p.res + 10);
+    else if (kind === 'fiber') p.fiber = Math.min(MAX_FIBER, p.fiber + 12);
     else if (item) this.acquireItem(item);
     if (kind !== 'gear') {
       this.audio.sfx('pickup', kind === 'heal' ? 1 : 1.3);
-      this.particles.burst(pos, kind === 'heal' ? new THREE.Color(0x7cff6b).multiplyScalar(2.5) : new THREE.Color(0x4fb4ff).multiplyScalar(2.5), 6, 4, 0.35, 0.4);
+      this.particles.burst(pos, kind === 'heal' ? new THREE.Color(0x7cff6b).multiplyScalar(2.5) : kind === 'fiber' ? new THREE.Color(0xc2ff7a).multiplyScalar(2.5) : new THREE.Color(0x4fb4ff).multiplyScalar(2.5), 6, 4, 0.35, 0.4);
     }
   }
 
@@ -1219,6 +1248,126 @@ export class Game {
   onHardLanding(p: Player, speed: number) {
     this.shake(Math.min(0.9, speed * 0.03));
     this.particles.ring(new THREE.Vector3(p.x, p.y + 0.3, p.z), this.palette.accentHDR, 24, 8, 0.5, 0.6);
+    this.world.props.debris.burst('rubble', p.x, p.y + 0.2, p.z, Math.min(10, Math.round(speed / 3)), speed * 0.3, new THREE.Color(0x30343c), 0.8);
+    this.strikeProps(p.x, p.y + 0.5, p.z, 3.5, speed > 24 ? 30 : 0, speed * 0.5);
+  }
+
+  /** Physical impact on props (crystals, pods, debris) plus the loot that falls out. */
+  strikeProps(x: number, y: number, z: number, radius: number, dmg: number, push: number, dirX = 0, dirZ = 0) {
+    const hit = this.world.props.strike(x, y, z, radius, dmg, push, dirX, dirZ);
+    for (const c of hit.crystals) {
+      this.pickups.drop(c.x, c.z, 'res');
+      this.pickups.drop(c.x, c.z, 'res');
+      this.pickups.drop(c.x, c.z, 'fiber');
+      this.particles.burst(this.tmp.set(c.x, c.y, c.z), new THREE.Color(0x9fd8ff).multiplyScalar(2.6), 26, 9, 0.5, 0.7);
+      this.audio.sfx('kill', 1.6);
+      this.shake(0.25);
+    }
+    for (const q of hit.pods) {
+      this.pickups.drop(q.x, q.z, 'fiber');
+      this.pickups.drop(q.x, q.z, 'fiber');
+      if (Math.random() < 0.4) this.pickups.drop(q.x, q.z, 'heal');
+      this.particles.burst(this.tmp.set(q.x, q.y, q.z), new THREE.Color(0xc2ff7a).multiplyScalar(2.6), 22, 6, 0.5, 0.8);
+      this.audio.sfx('pickup', 0.7);
+    }
+  }
+
+  // ---------------------------------------------------------------- traversal: tether & mode wheel
+
+  /** Pick the anchor closest to the reticle, else a solid surface along the view ray. */
+  private computeTetherAim() {
+    const p = this.player;
+    this.tetherAim = null;
+    if (p.tether.active || this.mode !== 'play') return;
+    const o = this.gfx.camera.position;
+    const d = this.rayD;
+    this.cam.forward3D(d);
+    let best: TetherAnchor | null = null;
+    let bestAng = this.input.lastDevice === 'touch' ? 0.32 : 0.2;
+    for (const a of this.world.tetherAnchors) {
+      const dist = Math.hypot(a.pos.x - p.x, a.pos.y - p.y, a.pos.z - p.z);
+      if (dist > TETHER_RANGE || dist < 3) continue;
+      this.tmp.subVectors(a.pos, o);
+      const len = this.tmp.length();
+      const ang = Math.acos(Math.min(1, this.tmp.dot(d) / len));
+      if (ang < bestAng) {
+        bestAng = ang;
+        best = a;
+      }
+    }
+    if (best) {
+      this.tetherAim = { point: best.pos, anchor: best, label: `[T] ${best.label}` };
+      return;
+    }
+    // any static / platform surface the reticle touches (not open ground, not loose debris)
+    const hit = this.world.physics.rayHit(o.x, o.y, o.z, d.x, d.y, d.z, TETHER_RANGE + 12, LAYER.static | LAYER.platform | LAYER.terrain);
+    if (!hit) return;
+    this.tetherPoint.set(o.x + d.x * hit.t, o.y + d.y * hit.t, o.z + d.z * hit.t);
+    const dist = Math.hypot(this.tetherPoint.x - p.x, this.tetherPoint.y - p.y, this.tetherPoint.z - p.z);
+    const isTerrain = !!(hit.collider.collisionGroups() >>> 16 & LAYER.terrain);
+    if (dist > TETHER_RANGE || dist < 4) return;
+    if (isTerrain && this.tetherPoint.y < p.y + 3.5) return;
+    this.tetherAim = { point: this.tetherPoint, anchor: null, label: '[T] Tether' };
+  }
+
+  private tryTether() {
+    const p = this.player;
+    if (p.tetherCD > 0) return;
+    if (!this.tetherAim) {
+      this.ui.toast('No anchor in reach');
+      return;
+    }
+    if (p.res < 6 && p.fiber < 6) {
+      this.ui.toast('Not enough Resonance to tether');
+      return;
+    }
+    if (!p.spendFuel(6)) return;
+    p.fireTether(this, this.tetherAim.point, this.tetherAim.anchor);
+    this.stats.dashes++;
+  }
+
+  /** Hold X for the traversal wheel (slow-motion), tap X to cycle Walk → Levitate → Flight. */
+  private updateWheel(dt: number, dead: boolean) {
+    const inp = this.input;
+    const p = this.player;
+    if (dead || this.ui.anyOverlay()) {
+      if (this.trav.isOpen) this.trav.close();
+      this.wheelHold = 0;
+      return;
+    }
+    const down = inp.isDown('KeyX');
+    if (down) {
+      this.wheelHold += dt;
+      if (!this.trav.isOpen && this.wheelHold > 0.16) {
+        this.trav.setAvailable({ walk: true, levitate: p.fuel >= 5, flight: p.fuel >= 10, tether: !!this.tetherAim || p.tether.active });
+        this.trav.open(p.travMode);
+        this.audio.sfx('ready', 1.4);
+      }
+      if (this.trav.isOpen) {
+        const mv = inp.moveVector(this.mv);
+        if (mv.lengthSq() > 0.2) this.trav.steer(mv.x * 6, mv.y * 6);
+      }
+      return;
+    }
+    if (this.trav.isOpen) {
+      const m = this.trav.close();
+      this.wheelHold = 0;
+      if (m) this.applyTravMode(m);
+      return;
+    }
+    if (inp.wasPressed('KeyX')) this.applyTravMode(TraversalUI.cycle(p.travMode));
+    this.wheelHold = 0;
+  }
+
+  private applyTravMode(m: TravMode) {
+    const p = this.player;
+    if (m === p.travMode) return;
+    if (m === 'tether') {
+      this.tryTether();
+      return;
+    }
+    const why = p.requestMode(this, m);
+    if (why) this.ui.toast(why);
   }
 
   shake(a: number) {
@@ -1746,6 +1895,7 @@ export class Game {
       const x = py.pos.x + 5;
       const z = py.pos.z;
       this.player.place(x, w.terrain.heightAt(x, z), z);
+      w.physics.prime(x, z);
       this.cam.snap(this.player.cameraTarget);
       this.ui.fade(false, 'white', 500);
       this.travelBusy = false;
@@ -1800,6 +1950,16 @@ export class Game {
       level: this.run.level,
       camps: this.camps.map((c) => c.cleared),
       playerMode: this.player.mode,
+      trav: this.player.travMode,
+      fiber: Math.round(this.player.fiber),
+      grounded: this.player.grounded,
+      groundY: +this.player.groundY.toFixed(2),
+      chunks: this.world.physics.terrainChunks,
+      pods: this.world.props.podCount,
+      crystals: this.world.props.crystalCount,
+      debris: this.world.props.debris.live,
+      caps: this.world.mushrooms.caps.length,
+      anchors: this.world.tetherAnchors.length,
       pos: [this.player.x, this.player.y, this.player.z],
       nullPoints: this.run.nullPoints,
       enemyNames: this.enemies.map((e) => ENEMY_NAME[e.kind]),
@@ -1816,6 +1976,7 @@ export class Game {
   }
   debugAt(x: number, z: number) {
     this.player.place(x, this.world.terrain.heightAt(x, z), z);
+    this.world.physics.prime(x, z);
     this.cam.snap(this.player.cameraTarget);
   }
   debugClearCamps() {

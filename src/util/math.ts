@@ -23,3 +23,5 @@ export const fmtTime = (s: number) => {
   const r = Math.floor(s % 60);
   return `${m}:${r.toString().padStart(2, '0')}`;
 };
+/** 137.5° — the phyllotaxis angle plants use to pack leaves, seeds and (here) mushroom shelves. */
+export const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
