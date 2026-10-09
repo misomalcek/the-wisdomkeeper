@@ -162,6 +162,11 @@ export class Physics {
     return this.world.createCollider(desc);
   }
 
+  removeCollider(c: RAPIER.Collider) {
+    this.colliderTags.delete(c.handle);
+    this.world.removeCollider(c, false);
+  }
+
   addFixed(desc: RAPIER.ColliderDesc, layer: number = LAYER.static, tag?: unknown) {
     const c = this.world.createCollider(desc.setCollisionGroups(groups(layer)));
     if (tag !== undefined) this.colliderTags.set(c.handle, tag);

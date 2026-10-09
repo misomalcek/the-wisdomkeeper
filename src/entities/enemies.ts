@@ -423,7 +423,7 @@ export function updateEnemy(e: Enemy, g: Game, dt: number) {
   // keep inside the arena and out of solid scenery
   const R = g.world.radius * 0.99;
   const rr = Math.hypot(e.x, e.z);
-  if (rr > R) {
+  if (!terrain.wild && rr > R) {
     e.x *= R / rr;
     e.z *= R / rr;
   }

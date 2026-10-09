@@ -430,7 +430,7 @@ export class Game {
     this.gfx.grace = 3.5;
     this.world = new World(def, this.run);
     this.gfx.scene.add(this.world.group);
-    this.world.physics.prime(this.world.startPos.x, this.world.startPos.z);
+    this.world.prime(this.world.startPos.x, this.world.startPos.z);
     this.cam.terrainH = (x, z) => this.world.terrain.heightAt(x, z);
     const p = this.world.palette;
     const lerpC = (a: number, b: number, t: number) => new THREE.Color(a).lerp(new THREE.Color(b), t).getHex();
@@ -607,7 +607,7 @@ export class Game {
     const w = this.world;
     const cp = this.checkpointPos();
     this.player.reset(cp.x, w.terrain.heightAt(cp.x, cp.z), cp.z, this.derived.maxHp);
-    w.physics.prime(cp.x, cp.z);
+    w.prime(cp.x, cp.z);
     this.player.hp = this.derived.maxHp;
     this.player.res = Math.max(this.player.res, 40);
     for (const e of this.enemies) if (e.kind !== 'boss' && (e.fromEvent || !e.idle)) e.dead = true;
@@ -765,8 +765,13 @@ export class Game {
 
   private updateWorldVisuals(dt: number) {
     const ph = this.world.physics;
-    ph.streamTerrain(this.player.x, this.player.z);
+    this.world.stream(this.player.x, this.player.z);
     ph.step(dt);
+    const wp = this.world.wilds?.pickups;
+    while (wp && wp.length) {
+      const k = wp.pop()!;
+      this.pickups.place(k.x, k.y, k.z, k.kind, 150);
+    }
     this.time += dt;
     this.world.update(dt, this.time, this.gfx.camera.position, this.gfx.pointScale, this.player.group.position);
     this.particles.update(dt);
@@ -1040,7 +1045,7 @@ export class Game {
   queueSpawn(kind: EnemyKind, x: number, z: number, fromEvent: boolean) {
     const R = this.world.radius * 0.92;
     const r = Math.hypot(x, z);
-    if (r > R) {
+    if ((fromEvent || !this.world.terrain.wild) && r > R) {
       x *= R / r;
       z *= R / r;
     }
@@ -1120,18 +1125,27 @@ export class Game {
     this.ambientTimer -= dt;
     if (this.ambientTimer > 0) return;
     this.ambientTimer = 4;
-    const target = Math.round((this.def.ambient * (0.7 + 0.3 * this.diff)) / 2);
+    const p = this.player;
+    const terrain = this.world.terrain;
+    // the farther into the Wilds, and the deeper into Null blight, the more the Null hunts you
+    const wildness = terrain.wildness(p.x, p.z);
+    const blight = terrain.blightAt(p.x, p.z);
+    const target = Math.round((this.def.ambient * (0.7 + 0.3 * this.diff)) / 2 + wildness * 2 + blight * 3);
     const ambientAlive = this.enemies.filter((e) => !e.dead && !e.fromEvent && e.campId < 0).length + this.pending.filter((s) => !s.fromEvent).length;
     if (ambientAlive >= target) return;
     if (this.world.nodes.length && this.world.nodes.every((n) => n.state === 'done') && this.gateOpen()) return;
     const R = this.world.radius * 0.85;
-    const p = this.player;
     for (let tries = 0; tries < 8; tries++) {
       const a = Math.random() * Math.PI * 2;
       const r = 45 + Math.random() * 35;
       const x = p.x + Math.cos(a) * r;
       const z = p.z + Math.sin(a) * r;
-      if (Math.hypot(x, z) > R) continue;
+      if (!terrain.wild && Math.hypot(x, z) > R) continue;
+      if (terrain.riverAt(x, z) > 0.3) continue;
+      if (blight > 0.3 && this.def.mix.brute > 0 && Math.random() < 0.25) {
+        this.queueSpawn('brute', x, z, false);
+        return;
+      }
       const mix = this.def.mix;
       const kinds = (['mite', 'spitter'] as const).filter((k) => mix[k] > 0);
       const total = kinds.reduce((s, k) => s + mix[k], 0);
@@ -1901,7 +1915,7 @@ export class Game {
       const x = py.pos.x + 5;
       const z = py.pos.z;
       this.player.place(x, w.terrain.heightAt(x, z), z);
-      w.physics.prime(x, z);
+      w.prime(x, z);
       this.cam.snap(this.player.cameraTarget);
       this.ui.fade(false, 'white', 500);
       this.travelBusy = false;
@@ -1982,7 +1996,7 @@ export class Game {
   }
   debugAt(x: number, z: number) {
     this.player.place(x, this.world.terrain.heightAt(x, z), z);
-    this.world.physics.prime(x, z);
+    this.world.prime(x, z);
     this.cam.snap(this.player.cameraTarget);
   }
   debugClearCamps() {

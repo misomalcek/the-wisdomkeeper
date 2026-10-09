@@ -593,7 +593,7 @@ export class Player {
     let nz = r.z;
     const R = g.world.radius * (this.mode === 'flight' ? 1.1 : 1.01);
     const rr = Math.hypot(nx, nz);
-    if (rr > R) {
+    if (!g.world.terrain.wild && rr > R) {
       nx *= R / rr;
       nz *= R / rr;
     }

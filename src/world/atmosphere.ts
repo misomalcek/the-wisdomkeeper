@@ -146,7 +146,8 @@ export class Spires {
     const o = new THREE.Object3D();
     for (let i = 0; i < count; i++) {
       const a = (i / count) * Math.PI * 2 + Math.random() * 0.12;
-      const r = radius * (1.95 + Math.random() * 1.1);
+      // a horizon skyline: the ring rides with the camera, so it can be approached but never reached
+      const r = Math.max(radius * 1.95, 300) + Math.random() * 130;
       const h = 70 + Math.random() * 150;
       const w = 8 + Math.random() * 16;
       o.position.set(Math.cos(a) * r, -25, Math.sin(a) * r);

@@ -102,6 +102,7 @@ export class Projectiles {
   update(game: Game, dt: number) {
     const terrain = game.world.terrain;
     const R = game.world.radius * 1.2;
+    const wild = !!terrain.wild;
     for (let i = this.delayed.length - 1; i >= 0; i--) {
       const d = this.delayed[i];
       d.t -= dt;
@@ -127,7 +128,7 @@ export class Projectiles {
       b.x += b.vx * dt * ts;
       b.y += b.vy * dt * ts;
       b.z += b.vz * dt * ts;
-      let dead = b.life <= 0 || b.x * b.x + b.z * b.z > R * R;
+      let dead = b.life <= 0 || (wild ? (b.x - player.x) ** 2 + (b.z - player.z) ** 2 > 160 * 160 : b.x * b.x + b.z * b.z > R * R);
       if (!dead && b.y < terrain.heightAt(b.x, b.z) + 0.15) dead = true;
 
       if (!dead && b.owner === 'player') {

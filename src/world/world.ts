@@ -15,6 +15,8 @@ import { Colliders } from './colliders';
 import { Physics } from '../physics/physics';
 import { DriftField, MushroomGroves, type TetherAnchor } from './traversal';
 import { Props } from './props';
+import { TerrainStreamer } from './chunks';
+import { Wilds } from './wilds';
 
 /** How much traversal furniture each region gets. */
 const TRAVERSAL: Record<string, { mush: number; drift: number; crystals: number; pods: number }> = {
@@ -54,6 +56,10 @@ export class World {
   readonly radius: number;
   readonly palette: Palette;
   readonly terrain: Terrain;
+  /** Chunk-streamed ground (one batched draw call). */
+  readonly ground: TerrainStreamer;
+  /** Procedural flora and mycelium of the infinite Wilds (null in bounded boss arenas). */
+  readonly wilds: Wilds | null;
   readonly flora: Flora;
   readonly mycelium: Mycelium;
   readonly grove: EchoGrove;
@@ -94,9 +100,15 @@ export class World {
       seed: baseSeed,
       palette: this.palette,
       grid: def.id === 'mirror' ? 0.9 : def.id === 'return' ? 0.35 : 0.6,
+      // boss arenas stay a closed bowl; every other region opens into the infinite Wilds
+      wild: !def.boss,
+      flavour: def.flora,
     });
-    this.group.add(this.terrain.mesh);
+    this.ground = new TerrainStreamer(this.terrain);
+    this.group.add(this.ground.mesh);
     this.physics = new Physics((x, z) => this.terrain.heightAt(x, z));
+    this.wilds = this.terrain.wild ? new Wilds(this.terrain, this.physics, this.palette, baseSeed ^ 0x77, this.tetherAnchors) : null;
+    if (this.wilds) this.group.add(this.wilds.group);
     this.colliders.onAdd = (x, z, r) => this.physics.addPillar(x, z, r);
 
     // ---- layout -----------------------------------------------------------------------
@@ -312,6 +324,35 @@ export class World {
     this.mycelium.seed(0, 0, 14, 0, 120);
   }
 
+  /** Debug: nearest point (beyond the core) deep inside the given Wilds biome. */
+  debugFindBiome(biome: number): { x: number; z: number } | null {
+    const w = this.terrain.wild;
+    if (!w) return null;
+    for (let r = this.radius * 1.8; r < 900; r += 20) {
+      for (let a = 0; a < Math.PI * 2; a += 0.2) {
+        const x = Math.cos(a) * r;
+        const z = Math.sin(a) * r;
+        const b = w.biomeAt(x, z);
+        if (b.biome === biome && b.core > 0.95 && this.terrain.riverAt(x, z) < 0.01) return { x, z };
+      }
+    }
+    return null;
+  }
+
+  /** Stream ground, Wilds and physics around the hero. */
+  stream(x: number, z: number) {
+    this.ground.update(x, z, 2);
+    this.wilds?.update(x, z, 1);
+    this.physics.streamTerrain(x, z);
+  }
+
+  /** Build everything around (x, z) at once (region entry, respawn, fast travel). */
+  prime(x: number, z: number) {
+    this.ground.prime(x, z);
+    this.wilds?.prime(x, z);
+    this.physics.prime(x, z);
+  }
+
   update(dt: number, t: number, camPos: THREE.Vector3, _pointScale: number, player: THREE.Vector3) {
     worldTime.value = t;
     this.terrain.update(t);
@@ -319,6 +360,7 @@ export class World {
     this.mycelium.update(dt, t);
     this.grove.update(dt);
     this.sky.update(t, camPos);
+    this.spires.mesh.position.set(camPos.x, 0, camPos.z);
     this.motes.update();
     this.gate?.update(dt, t);
     this.mushrooms.update(t);
@@ -389,6 +431,8 @@ export class World {
   }
 
   dispose() {
+    this.wilds?.dispose();
+    this.ground.dispose();
     this.terrain.dispose();
     this.flora.dispose();
     this.mycelium.dispose();

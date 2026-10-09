@@ -5,6 +5,7 @@ import {
   fract, abs, max, min, clamp, fwidth, exp, dot, distance, atan, smoothstep as sstep, pow,
 } from 'three/tsl';
 import { worldTime, fbm2, conduction, type N } from '../engine/materials';
+import { WildField } from './gen/field';
 import { fbm, makeNoise2D, type Noise2D } from '../util/rng';
 import { smoothstep } from '../util/math';
 import type { Palette } from '../story/strata';
@@ -18,17 +19,24 @@ export interface TerrainOpts {
   palette: Palette;
   /** 0..1 how strongly the circuit-grid shows through. */
   grid: number;
+  /** Open the region into the infinite Wilds (false keeps the bowl rim, for boss arenas). */
+  wild: boolean;
+  flavour: 'seedbed' | 'river' | 'canopy' | 'mirror' | 'return';
 }
 
 export const MAX_LIGHTS = 10;
 export const MAX_CORRUPT = 8;
 
 /**
- * Heightfield arena. Height, river mask and flow are analytic so entities can
- * query them every frame without touching the mesh.
+ * Ground of a region: an authored core (the story arena) that blends, past its Veil seam, into the
+ * infinite fractal Wilds. Height, river mask, flow and blight are analytic so entities, physics and the
+ * chunk streamer all read the same surface every frame without touching any mesh.
  */
 export class Terrain {
-  readonly mesh: THREE.Mesh;
+  /** Shared ground material; the chunk streamer draws every chunk with it. */
+  readonly material: MeshStandardNodeMaterial;
+  /** Infinite Wilds beyond the authored core (null for bounded boss arenas). */
+  readonly wild: WildField | null;
   readonly radius: number;
   private noise: Noise2D;
   private amp: number;
@@ -53,21 +61,7 @@ export class Terrain {
     this.riverP = (o.seed % 628) / 100;
     this.riverW = 9;
 
-    const size = o.radius * 3.4;
-    const seg = Math.min(420, Math.round(size / 0.9));
-    const geo = new THREE.PlaneGeometry(size, size, seg, seg);
-    geo.rotateX(-Math.PI / 2);
-    const p = geo.attributes.position as THREE.BufferAttribute;
-    const riverAttr = new Float32Array(p.count);
-    for (let i = 0; i < p.count; i++) {
-      const x = p.getX(i);
-      const z = p.getZ(i);
-      p.setY(i, this.heightAt(x, z));
-      riverAttr[i] = this.riverAt(x, z);
-    }
-    geo.setAttribute('aRiver', new THREE.BufferAttribute(riverAttr, 1));
-    geo.computeVertexNormals();
-    geo.deleteAttribute('uv');
+    this.wild = o.wild ? new WildField(o.seed, o.flavour) : null;
 
     const c = (hex: number) => new THREE.Color(hex);
     this.u = {
@@ -81,9 +75,7 @@ export class Terrain {
       stream: uniform(o.grid > 0.8 ? 0.35 : 1),
       nullCol: uniform(new THREE.Color(0xff0055)),
     };
-    this.mesh = new THREE.Mesh(geo, this.buildMaterial());
-    this.mesh.receiveShadow = true;
-    this.mesh.frustumCulled = false;
+    this.material = this.buildMaterial();
   }
 
   /**
@@ -96,6 +88,7 @@ export class Terrain {
     const lights = uniformArray(this.lightArr, 'vec4');
     const corrupt = uniformArray(this.corruptArr, 'vec4');
     const riverAttr = attribute('aRiver', 'float');
+    const blightAttr: N = attribute('aBlight', 'float');
     const w = positionWorld;
     const dist = positionView.length();
     const t = worldTime;
@@ -127,7 +120,7 @@ export class Terrain {
       return acc;
     });
     const glow: N = glowF();
-    const cor: N = corF();
+    const cor: N = max(corF(), blightAttr);
 
     // ---- albedo: height banding, slope rock, eye-level mottling, Null stain
     const h = sstep(-2, 7, w.y);
@@ -204,13 +197,46 @@ export class Terrain {
     return out;
   }
 
-  heightAt(x: number, z: number) {
-    const r = Math.hypot(x, z);
+  /** Distance from the river's centre line (∞ when the region has no river). */
+  riverDist(x: number, z: number) {
+    return this.river ? Math.abs(x - this.centerX(z)) : Infinity;
+  }
+
+  /** 0 inside the authored core → 1 fully in the Wilds. */
+  wildness(x: number, z: number) {
+    if (!this.wild) return 0;
+    return smoothstep(this.radius * 0.92, this.radius * 1.7, Math.hypot(x, z));
+  }
+
+  private coreHeight(x: number, z: number, r: number) {
     let h = fbm(this.noise, x * this.freq, z * this.freq, 4) * this.amp * 2;
     h *= 0.3 + 0.7 * smoothstep(5, 22, r);
-    h += smoothstep(this.radius * 0.94, this.radius * 1.35, r) * (14 + this.radius * 0.3);
+    return h;
+  }
+
+  heightAt(x: number, z: number) {
+    const r = Math.hypot(x, z);
+    let h = this.coreHeight(x, z, r);
+    if (!this.wild) {
+      h += smoothstep(this.radius * 0.94, this.radius * 1.35, r) * (14 + this.radius * 0.3);
+    } else {
+      const t = smoothstep(this.radius * 0.92, this.radius * 1.7, r);
+      if (t > 0) {
+        let wh = this.wild.height(x, z);
+        // rivers keep flowing through the Wilds and carve their own valleys
+        if (this.river) wh *= smoothstep(this.riverW, this.riverW * 5, this.riverDist(x, z));
+        h += (wh - h) * t;
+      }
+    }
     if (this.river) h -= this.riverAt(x, z) * 1.6;
     return h;
+  }
+
+  /** Null corruption baked into the ground of Blight biomes (0..1). */
+  blightAt(x: number, z: number) {
+    if (!this.wild) return 0;
+    const t = this.wildness(x, z);
+    return t > 0 ? this.wild.biomeAt(x, z).blight * t : 0;
   }
 
   /** Terrain steepness |∇h| (1 ≈ 45°). */
@@ -248,7 +274,6 @@ export class Terrain {
   update(_t: number) {}
 
   dispose() {
-    this.mesh.geometry.dispose();
-    (this.mesh.material as THREE.Material).dispose();
+    this.material.dispose();
   }
 }
