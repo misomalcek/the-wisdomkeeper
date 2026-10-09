@@ -3,6 +3,7 @@ import type { Game } from '../game';
 import { Hero, idlePose, type HeroPose, type MoveMode } from './hero';
 import { angleDiff, clamp, damp } from '../util/math';
 import { Tether } from './tether';
+import { HERO_GRAVITY, JUMP_SPEED, KCC, PHYSICS_PROFILES, TraversalMode } from '../physics/profiles';
 import type { GroundHit } from '../physics/physics';
 import type { SurfaceTag, TetherAnchor } from '../world/traversal';
 import type { TravMode } from '../ui/traversal-ui';
@@ -25,13 +26,15 @@ export interface Intent {
 }
 
 export const BASE_SPEED = 8.5;
-export const GRAVITY = 30;
-const JUMP_V = 11.5;
-/** Thruster pack: terminal speed = sqrt(thrust / drag) = 21 m/s cruising, ~35 m/s on afterburner. */
-const FLIGHT_THRUST = 40;
-const FLIGHT_DRAG = FLIGHT_THRUST / (21 * 21);
-const BOOST_MUL = 2.8;
-const HOVER_H = 1.35;
+export const GRAVITY = HERO_GRAVITY;
+const JUMP_V = JUMP_SPEED;
+const FLY = PHYSICS_PROFILES[TraversalMode.FREE_FLIGHT];
+const LEV = PHYSICS_PROFILES[TraversalMode.AQUATIC_LEVITATION];
+/** Thruster pack: terminal speed = sqrt(thrust / drag) = 22 m/s cruising, 1.8× that on afterburner. */
+const FLIGHT_THRUST = FLY.acceleration;
+const FLIGHT_DRAG = FLIGHT_THRUST / (FLY.maxSpeed * FLY.maxSpeed);
+const BOOST_MUL = KCC.flightBoost * KCC.flightBoost;
+const HOVER_H = KCC.hoverHeight;
 export const MAX_FIBER = 100;
 export const TETHER_RANGE = 42;
 
@@ -422,11 +425,12 @@ export class Player {
       this.mode = 'air';
       return;
     }
-    const maxSp = BASE_SPEED * speedMul * (onFlow ? 1 : 1.15);
+    // conducted flow is fast (14 m/s profile); hovering off the flow lines is a little quicker than walking
+    const maxSp = (onFlow ? LEV.maxSpeed : BASE_SPEED * 1.15) * speedMul;
     const tx = active && moving ? it.mx * maxSp : 0;
     const tz = active && moving ? it.mz * maxSp : 0;
-    this.vx = damp(this.vx, tx, moving ? 12 : 6, dt);
-    this.vz = damp(this.vz, tz, moving ? 12 : 6, dt);
+    this.vx = damp(this.vx, tx, moving ? LEV.acceleration * 0.4 : LEV.dragDamping, dt);
+    this.vz = damp(this.vz, tz, moving ? LEV.acceleration * 0.4 : LEV.dragDamping, dt);
     const surface = onFlow ? Math.max(this.groundY, terrain.waterY(this.x, this.z)) : this.groundY;
     const target = surface + HOVER_H + Math.sin(g.time * 2.2) * 0.06;
     this.vy = clamp((target - this.y) * 9, -14, 14);
@@ -436,7 +440,7 @@ export class Player {
       const f = g.flowAt(this.x, this.z);
       this.vx += f.x * dt * 2.4;
       this.vz += f.y * dt * 2.4;
-    } else if (active && !this.spendFuel(3.5 * g.derived.flightDrain * dt)) {
+    } else if (active && !this.spendFuel(LEV.resonanceCostPerSec * 2.5 * g.derived.flightDrain * dt)) {
       this.levManual = false;
       this.mode = 'air';
       g.ui.toast('Fuel spent — levitation collapses');
@@ -490,7 +494,7 @@ export class Player {
       ay -= this.vy * 1.6;
       az -= this.vz * 1.6;
     }
-    const drain = (boost ? 12 : 5) * D.flightDrain * (thrusting ? 1 : 0.35);
+    const drain = FLY.resonanceCostPerSec * (boost ? 2.4 : 1) * D.flightDrain * (thrusting ? 1 : 0.35);
     const fuelled = !active || this.spendFuel(drain * dt);
     if (!fuelled) ay -= GRAVITY; // hover assist (cancelling gravity) only while fuel lasts
     this.vx += ax * dt;

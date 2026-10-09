@@ -5,7 +5,7 @@ import type { Affinity, Item, Rarity, RunState, Slot, StatKey } from '../types';
 export const SLOTS: Slot[] = ['helm', 'armor', 'boots', 'blade', 'modulator', 'core'];
 
 export const SLOT_LABEL: Record<Slot, string> = {
-  helm: 'Helm', armor: 'Armor', boots: 'Boots', blade: 'Root-Blade', modulator: 'Modulator', core: 'Core',
+  helm: 'Helm', armor: 'Armor', boots: 'Boots', blade: 'Root-Blade Unit', modulator: 'Chlorophyll Coil', core: 'Memory Seed Core',
 };
 
 export const RARITY: Record<Rarity, { name: string; color: string; mul: number; stats: number }> = {

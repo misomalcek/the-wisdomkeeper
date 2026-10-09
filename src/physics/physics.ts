@@ -1,4 +1,5 @@
 import RAPIER from '@dimforge/rapier3d-compat';
+import { G, KCC } from './profiles';
 
 export { RAPIER };
 
@@ -76,7 +77,7 @@ export class Physics {
   alpha = 0;
   private colliderTags = new Map<number, unknown>();
 
-  constructor(heightAt: HeightFn, gravity = 30) {
+  constructor(heightAt: HeightFn, gravity = G) {
     this.heightAt = heightAt;
     this.world = new RAPIER.World({ x: 0, y: -gravity, z: 0 });
     this.world.timestep = FIXED_DT;
@@ -274,12 +275,13 @@ export class Character {
         .setTranslation(0, 50, 0)
         .setCollisionGroups(groups(LAYER.player, SOLID)),
     );
-    const c = w.createCharacterController(0.01);
+    const c = w.createCharacterController(KCC.offset);
     c.setUp({ x: 0, y: 1, z: 0 });
-    c.setMaxSlopeClimbAngle((46 * Math.PI) / 180);
-    c.setMinSlopeSlideAngle((52 * Math.PI) / 180);
-    c.enableAutostep(0.45, 0.2, false);
-    c.enableSnapToGround(0.45);
+    c.setMaxSlopeClimbAngle(KCC.maxSlopeClimb);
+    c.setMinSlopeSlideAngle(KCC.minSlopeSlide);
+    // dynamic bodies are pushed, not stepped onto (Grounding Report §3.2)
+    c.enableAutostep(KCC.autostepHeight, KCC.autostepWidth, KCC.autostepDynamic);
+    c.enableSnapToGround(KCC.snapToGround);
     c.setSlideEnabled(true);
     c.setApplyImpulsesToDynamicBodies(true);
     c.setCharacterMass(70);
@@ -300,7 +302,7 @@ export class Character {
   setSnap(on: boolean) {
     if (on === this.snap) return;
     this.snap = on;
-    if (on) this.controller.enableSnapToGround(0.45);
+    if (on) this.controller.enableSnapToGround(KCC.snapToGround);
     else this.controller.disableSnapToGround();
   }
 
