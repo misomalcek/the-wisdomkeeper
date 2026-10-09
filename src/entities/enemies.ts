@@ -1,8 +1,11 @@
 import * as THREE from 'three';
 import { MeshBasicNodeMaterial, MeshStandardNodeMaterial, LineBasicNodeMaterial } from 'three/webgpu';
-import { glowBasic, standard, glowLine, fresnel, type N } from '../engine/materials';
-import { uniform, positionGeometry, sin, smoothstep, vec3, materialEmissive } from 'three/tsl';
+import { glowBasic, standard, glowLine, type N } from '../engine/materials';
+import { uniform } from 'three/tsl';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { Game } from '../game';
+import { applyLook, heroMaterial, heroUniforms, type HeroUniforms } from '../assets/heroModel';
+import { FB, FIEND_CORE, buildFiendRig, fiendGeometry } from '../assets/fiendModel';
 import type { EnemyKind } from '../types';
 import { TAU, angleDiff, clamp, damp } from '../util/math';
 
@@ -33,54 +36,32 @@ export const ENEMY_NAME: Record<EnemyKind, string> = { mite: 'Null Sprite', spit
 export const enemyXp = (k: EnemyKind) => TABLE[k].xp;
 
 const GEO = {
-  mite: new THREE.OctahedronGeometry(0.52, 0),
+  // octahedral shell with four splayed legs, merged into one draw
+  mite: mergeGeometries([
+    new THREE.OctahedronGeometry(0.52, 0).deleteAttribute('uv'),
+    ...[0, 1, 2, 3].map((i) => {
+      const a = (i / 4) * TAU;
+      const m = new THREE.Matrix4().compose(
+        new THREE.Vector3(Math.cos(a) * 0.5, -0.2, Math.sin(a) * 0.5),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.sin(a) * 1.9, 0, -Math.cos(a) * 1.9)),
+        new THREE.Vector3(0.6, 0.6, 0.6),
+      );
+      return new THREE.ConeGeometry(0.1, 0.55, 5).toNonIndexed().deleteAttribute('uv').applyMatrix4(m);
+    }),
+  ])!,
   miteEdges: new THREE.EdgesGeometry(new THREE.OctahedronGeometry(0.54, 0)),
   miteCore: new THREE.IcosahedronGeometry(0.2, 0),
   spitter: new THREE.ConeGeometry(0.55, 1.5, 5),
   spitterEdges: new THREE.EdgesGeometry(new THREE.ConeGeometry(0.58, 1.54, 5)),
   ring: new THREE.TorusGeometry(0.8, 0.04, 6, 24),
-  spike: new THREE.ConeGeometry(0.1, 0.55, 5),
   tele: new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2).translate(0, 0, 0.5),
   haloRing: [3.4, 4.4].map((r) => new THREE.TorusGeometry(r, 0.06, 6, 64)),
   bar: new THREE.PlaneGeometry(1, 0.1),
   eye: new THREE.SphereGeometry(0.045, 8, 6),
 };
 
-/** tapered limb hanging from its pivot (same helper as the hero) */
-function limbGeo(r0: number, r1: number, len: number, bulge = 0.2) {
-  const pts: THREE.Vector2[] = [new THREE.Vector2(0.001, r0 * 0.6)];
-  for (let i = 0; i <= 8; i++) {
-    const t = i / 8;
-    pts.push(new THREE.Vector2((r0 + (r1 - r0) * t) * (1 + bulge * Math.sin(Math.min(1, t * 1.3) * Math.PI)), -len * t));
-  }
-  pts.push(new THREE.Vector2(0.001, -len - r1 * 0.6));
-  return new THREE.LatheGeometry(pts, 8);
-}
 const FIEND_GEO = {
-  thigh: limbGeo(0.2, 0.13, 0.9),
-  shin: limbGeo(0.13, 0.07, 0.9),
-  upper: limbGeo(0.16, 0.11, 1.0),
-  fore: limbGeo(0.11, 0.08, 1.05),
-  torso: new THREE.SphereGeometry(0.75, 12, 10),
-  claw: new THREE.ConeGeometry(0.06, 0.5, 4),
-  thorn: new THREE.ConeGeometry(0.09, 0.55, 5),
-  head: new THREE.SphereGeometry(0.34, 12, 10),
   core: new THREE.IcosahedronGeometry(0.3, 1),
-  antlers: (() => {
-    const geos: THREE.BufferGeometry[] = [];
-    for (let i = 0; i < 6; i++) {
-      const side = i % 2 ? 1 : -1;
-      const k = Math.floor(i / 2);
-      const pts = [
-        new THREE.Vector3(side * 0.12, 0.2, -0.05),
-        new THREE.Vector3(side * (0.3 + k * 0.1), 0.55 + k * 0.1, -0.12 - k * 0.08),
-        new THREE.Vector3(side * (0.45 + k * 0.2), 0.95 + k * 0.15, -0.3 - k * 0.1),
-        new THREE.Vector3(side * (0.4 + k * 0.28), 1.35 + k * 0.1, -0.5 - k * 0.1),
-      ];
-      geos.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 10, 0.04 - k * 0.006, 5, false));
-    }
-    return geos;
-  })(),
 };
 
 export class Enemy {
@@ -134,7 +115,7 @@ export class Enemy {
   extraMats: THREE.Material[] = [];
   readonly uHurt: N = uniform(0);
   readonly uT: N = uniform(0);
-  j: { legL?: THREE.Group; legR?: THREE.Group; armL?: THREE.Group; armR?: THREE.Group; head?: THREE.Group; torso?: THREE.Group; core?: THREE.Mesh } = {};
+  j: { legL?: THREE.Object3D; legR?: THREE.Object3D; armL?: THREE.Object3D; armR?: THREE.Object3D; head?: THREE.Object3D; torso?: THREE.Object3D; core?: THREE.Mesh } = {};
   bar?: THREE.Mesh;
   barBg?: THREE.Mesh;
   phaseAnim = Math.random() * 6;
@@ -166,14 +147,6 @@ export class Enemy {
       const core = new THREE.Mesh(GEO.miteCore, glowBasic({ color: new THREE.Color(0xff9ab8).multiplyScalar(2.6) }));
       this.extraMats.push(core.material as THREE.Material);
       this.body.add(new THREE.Mesh(GEO.mite, this.coreMat), new THREE.LineSegments(GEO.miteEdges, this.edgeMat), core);
-      for (let i = 0; i < 4; i++) {
-        const sp = new THREE.Mesh(GEO.spike, this.coreMat);
-        const a = (i / 4) * TAU;
-        sp.position.set(Math.cos(a) * 0.5, -0.2, Math.sin(a) * 0.5);
-        sp.scale.setScalar(0.6);
-        sp.rotation.set(Math.sin(a) * 1.9, 0, -Math.cos(a) * 1.9);
-        this.body.add(sp);
-      }
     } else if (kind === 'spitter') {
       this.coreMat = solid(0.6);
       this.baseEmissive = 0.6;
@@ -231,125 +204,31 @@ export class Enemy {
     });
   }
 
-  private fiendMat(color: number, vein: number) {
-    const m = standard({ color, roughness: 0.6, metalness: 0.35, flatShading: false, emissive: 0x050208, emissiveIntensity: 1 });
-    const uHurt = this.uHurt;
-    const uT = this.uT;
-    const veinCol = uniform(new THREE.Color(vein));
-    const o: N = positionGeometry;
-    const fv = sin(o.y.mul(9).add(sin(o.x.mul(7).add(o.z.mul(5))).mul(2)).add(uT.mul(0.5)));
-    const fvein = smoothstep(0.9, 0.99, fv).mul(sin(uT.mul(2.2).add(o.x.mul(5))).mul(0.4).add(0.6));
-    m.emissiveNode = materialEmissive.add(veinCol.mul(fvein.mul(1.4).add(fresnel(3).mul(0.35)))).add(vec3(1, 0.95, 0.95).mul(uHurt));
-    this.extraMats.push(m);
-    return m;
-  }
-
-  /** Void-Root Fiend: hunched, antlered, thorned; glowing mycelial core is the weak point. */
+  /** Void-Root Fiend: one sculpted skinned mesh (assets/fiendModel); its glowing mycelial core is the weak point. */
   private buildFiend() {
-    const bodyMat = this.fiendMat(0x1b1426, 0x7cff6b);
-    const darkMat = this.fiendMat(0x0f0a18, 0x4fd8ff);
-    const thornMat = standard({ color: 0x0a0610, roughness: 0.5, metalness: 0.4, emissive: 0x7cff6b, emissiveIntensity: 0.25 });
-    this.extraMats.push(thornMat);
-    const glow = glowBasic({ color: new THREE.Color(0x8cff9a).multiplyScalar(2.4) });
-    this.extraMats.push(glow);
+    const u: HeroUniforms = { ...heroUniforms(), uT: this.uT, uHurt: this.uHurt };
+    applyLook(u, { body: 0x3e3052, armor: 0x140c1c, vein: 0x7cff6b, accent: 0x8cff9a, dark: 0x251a36 });
+    const mat = heroMaterial(u, 0.5, 0.45);
+    this.extraMats.push(mat);
     const coreMat = glowBasic({ color: new THREE.Color(0xffa24a).multiplyScalar(2.6) });
     this.extraMats.push(coreMat);
-    const b = this.body;
-
-    const torso = new THREE.Group();
-    torso.position.set(0, 1.45, 0);
-    const chest = new THREE.Mesh(FIEND_GEO.torso, bodyMat);
-    chest.scale.set(1.0, 1.12, 0.72);
-    torso.add(chest);
-    const hump = new THREE.Mesh(FIEND_GEO.torso, darkMat);
-    hump.scale.set(0.8, 0.7, 0.7);
-    hump.position.set(0, 0.5, -0.35);
-    torso.add(hump);
-    for (let i = 0; i < 9; i++) {
-      const th = new THREE.Mesh(FIEND_GEO.thorn, thornMat);
-      const a = (i / 9) * Math.PI * 1.4 - 0.7;
-      th.position.set(Math.sin(a) * 0.62, 0.5 + (i % 3) * 0.2, -0.45 - Math.cos(a) * 0.1);
-      th.rotation.set(-1.0 - (i % 3) * 0.3, 0, -Math.sin(a) * 1.0);
-      th.scale.setScalar(0.8 + (i % 4) * 0.25);
-      torso.add(th);
-    }
-    // mycelial core (weak point) nested in the chest
+    const rig = buildFiendRig();
+    const mesh = new THREE.SkinnedMesh(fiendGeometry(), mat);
+    mesh.add(rig.bones[FB.root]);
+    mesh.bind(rig.skeleton);
+    mesh.frustumCulled = false;
+    this.body.add(mesh);
+    const B = rig.bones;
+    B[FB.shL].rotation.z = -0.25;
+    B[FB.shR].rotation.z = 0.25;
+    B[FB.elL].rotation.x = B[FB.elR].rotation.x = -0.5;
+    B[FB.knL].rotation.x = B[FB.knR].rotation.x = 0.9;
+    B[FB.hipL].rotation.x = B[FB.hipR].rotation.x = -0.45;
     const core = new THREE.Mesh(FIEND_GEO.core, coreMat);
-    core.position.set(0, 0.05, 0.5);
-    torso.add(core);
-    const cage: THREE.Mesh[] = [];
-    for (let i = 0; i < 4; i++) {
-      const rib = new THREE.Mesh(FIEND_GEO.claw, thornMat);
-      const a = (i / 4) * TAU + 0.4;
-      rib.position.set(Math.cos(a) * 0.32, 0.05 + Math.sin(a) * 0.32, 0.5);
-      rib.rotation.set(Math.sin(a) * 1.2 + Math.PI / 2, 0, -Math.cos(a) * 1.2);
-      rib.scale.set(1.2, 0.8, 1.2);
-      torso.add(rib);
-      cage.push(rib);
-    }
-    b.add(torso);
-    this.j.torso = torso;
-    this.j.core = core;
-
-    const head = new THREE.Group();
-    head.position.set(0, 0.95, 0.28);
-    const skull = new THREE.Mesh(FIEND_GEO.head, darkMat);
-    skull.scale.set(0.8, 1.15, 1.1);
-    head.add(skull);
-    for (const eyeX of [-0.12, 0.12]) {
-      const eye = new THREE.Mesh(GEO.eye, glow);
-      eye.position.set(eyeX, 0.05, 0.36);
-      head.add(eye);
-    }
-    for (const g of FIEND_GEO.antlers) head.add(new THREE.Mesh(g, thornMat));
-    torso.add(head);
-    this.j.head = head;
-
-    const arm = (side: number) => {
-      const sh = new THREE.Group();
-      sh.position.set(side * 0.8, 0.45, 0.05);
-      sh.add(new THREE.Mesh(FIEND_GEO.upper, bodyMat));
-      const el = new THREE.Group();
-      el.position.y = -1.0;
-      el.add(new THREE.Mesh(FIEND_GEO.fore, darkMat));
-      for (let i = -1; i <= 1; i++) {
-        const c = new THREE.Mesh(FIEND_GEO.claw, thornMat);
-        c.position.set(i * 0.07, -1.18, 0.04);
-        c.rotation.set(Math.PI + 0.2, 0, i * 0.3);
-        el.add(c);
-      }
-      el.rotation.x = -0.5;
-      sh.add(el);
-      sh.rotation.z = side * 0.25;
-      torso.add(sh);
-      return sh;
-    };
-    this.j.armL = arm(-1);
-    this.j.armR = arm(1);
-
-    const leg = (side: number) => {
-      const hip = new THREE.Group();
-      hip.position.set(side * 0.42, 1.0, 0);
-      hip.add(new THREE.Mesh(FIEND_GEO.thigh, bodyMat));
-      const knee = new THREE.Group();
-      knee.position.y = -0.9;
-      knee.rotation.x = 0.9;
-      knee.add(new THREE.Mesh(FIEND_GEO.shin, darkMat));
-      for (let i = -1; i <= 1; i++) {
-        const c = new THREE.Mesh(FIEND_GEO.claw, thornMat);
-        c.position.set(i * 0.07, -0.96, 0.12);
-        c.rotation.set(Math.PI / 2 + 0.3, 0, i * 0.25);
-        knee.add(c);
-      }
-      hip.add(knee);
-      hip.rotation.x = -0.45;
-      b.add(hip);
-      return hip;
-    };
-    this.j.legL = leg(-1);
-    this.j.legR = leg(1);
-    void cage;
-    b.scale.setScalar(this.scale);
+    core.position.copy(FIEND_CORE);
+    B[FB.torso].add(core);
+    this.j = { torso: B[FB.torso], head: B[FB.head], armL: B[FB.shL], armR: B[FB.shR], legL: B[FB.hipL], legR: B[FB.hipR], core };
+    this.body.scale.setScalar(this.scale);
   }
 
   private makeTele(width: number, len: number) {

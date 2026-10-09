@@ -1,16 +1,18 @@
 import * as THREE from 'three';
-import { MeshBasicNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu';
-import { glowBasic, standard, fresnel, type N } from '../engine/materials';
-import { uniform, positionGeometry, sin, smoothstep, vec3, materialEmissive } from 'three/tsl';
+import { MeshBasicNodeMaterial } from 'three/webgpu';
+import { glowBasic } from '../engine/materials';
 import type { Skin } from '../types';
 import { clamp } from '../util/math';
+import { BONE, CREST_SEGS, CREST_STRANDS, LEG, applyLook, buildRig, heroGeometry, heroMaterial, heroUniforms, rootBladeGeometry, type HeroLook } from '../assets/heroModel';
+import { loadedModel } from '../assets/pipeline';
 
 export type MoveMode = 'ground' | 'air' | 'flight' | 'levitate';
 
-export const SKIN_LOOK: Record<Skin, { vein: number; body: number; armor: number; accent: number }> = {
-  resonant: { vein: 0x4fe8ff, body: 0xc6e6f2, armor: 0x1b3560, accent: 0x5cffc1 },
-  verdant: { vein: 0x7cff6b, body: 0xcfe9c8, armor: 0x1c4a2a, accent: 0xc2ff7a },
-  void: { vein: 0xff3b7a, body: 0xe4c8d4, armor: 0x4a1230, accent: 0xff6aa0 },
+/** Suit palettes: the Tripo reference (resonant) plus the Verdant and Void suits. */
+export const SKIN_LOOK: Record<Skin, HeroLook> = {
+  resonant: { body: 0x62b4dc, armor: 0x4a3a9e, vein: 0x4ff0ff, accent: 0x9ff3ff, dark: 0x1a2a3a },
+  verdant: { body: 0x7fc89a, armor: 0x2f6a44, vein: 0x8cff6b, accent: 0xd4ff8a, dark: 0x2a2416 },
+  void: { body: 0x9a7ab8, armor: 0x3c1236, vein: 0xff3b7a, accent: 0xff8ab6, dark: 0x1a0c16 },
 };
 
 export interface HeroPose {
@@ -26,6 +28,8 @@ export interface HeroPose {
   dead: boolean;
   /** world-space velocity heading relative to facing, used to bank in flight */
   bank: number;
+  /** Optional ground probe (world x, z → surface y) that enables foot planting by leg IK. */
+  ground?: ((x: number, z: number) => number) | null;
 }
 
 export const idlePose = (): HeroPose => ({
@@ -35,6 +39,8 @@ export const idlePose = (): HeroPose => ({
 
 const ease = (t: number) => 1 - Math.pow(1 - clamp(t, 0, 1), 3);
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+const _a = new THREE.Vector3();
+const _t = new THREE.Vector3();
 
 type JointKey =
   | 'bodyX' | 'bodyZ' | 'hipsY' | 'spX' | 'spY' | 'spZ' | 'headX' | 'headY'
@@ -43,261 +49,86 @@ type JointKey =
 
 const KEYS: JointKey[] = ['bodyX', 'bodyZ', 'hipsY', 'spX', 'spY', 'spZ', 'headX', 'headY', 'thLx', 'thRx', 'thLz', 'thRz', 'knL', 'knR', 'shLx', 'shLz', 'shRx', 'shRz', 'elL', 'elR'];
 
-/** The Wisdomkeeper: slender bioluminescent humanoid, ~1.85 units tall, forward = +Z. */
+/**
+ * The Wisdomkeeper: one sculpted SkinnedMesh (see assets/heroModel) driven by a procedural pose rig with
+ * two-bone leg IK for foot planting, plus the Root-Blade and spore-bolter orb. ~2.05 units tall, forward = +Z.
+ */
 export class Hero {
   readonly root = new THREE.Group();
-  readonly body = new THREE.Group();
-  private hips = new THREE.Group();
-  private spine = new THREE.Group();
-  private head = new THREE.Group();
-  private thL = new THREE.Group();
-  private thR = new THREE.Group();
-  private knL = new THREE.Group();
-  private knR = new THREE.Group();
-  private shL = new THREE.Group();
-  private shR = new THREE.Group();
-  private elL = new THREE.Group();
-  private elR = new THREE.Group();
-  private handR = new THREE.Group();
-  private blade = new THREE.Group();
+  private bones: THREE.Bone[];
+  private mesh: THREE.SkinnedMesh;
+  private grip = new THREE.Object3D();
+  private blade: THREE.Mesh;
   private bolter: THREE.Mesh;
-  private tendrils: THREE.Group[][] = [];
   private cur = {} as Record<JointKey, number>;
   private phase = 0;
   private time = 0;
   private held = false;
   private heldUntil = 0;
-  private disposables: { dispose(): void }[] = [];
-  private u: { uVein: N; uT: N; uHurt: N } = { uVein: uniform(new THREE.Color()), uT: uniform(0), uHurt: uniform(0) };
-  private skinMat: MeshStandardNodeMaterial;
-  private armorMat: MeshStandardNodeMaterial;
+  private ikW = 0;
+  private ikOff = [0, 0];
+  private foot = [0, 0];
+  private u = heroUniforms();
+  private mat: ReturnType<typeof heroMaterial>;
   private glowMat: MeshBasicNodeMaterial;
-  private bladeMat: MeshBasicNodeMaterial;
-  private veinCol = new THREE.Color();
+  private disposables: { dispose(): void }[] = [];
 
   constructor(skin: Skin = 'resonant') {
     for (const k of KEYS) this.cur[k] = 0;
-    const look = SKIN_LOOK[skin];
-    this.skinMat = this.makeSkinMat(look.body);
-    this.armorMat = standard({ color: look.armor, roughness: 0.38, metalness: 0.55, emissive: look.vein, emissiveIntensity: 0.08 });
-    this.glowMat = glowBasic({ color: new THREE.Color(look.vein).multiplyScalar(2.2) });
-    this.bladeMat = glowBasic({ color: new THREE.Color(look.accent).multiplyScalar(2.2) });
-    this.disposables.push(this.skinMat, this.armorMat, this.glowMat, this.bladeMat);
+    const rig = buildRig();
+    this.bones = rig.bones;
+    this.mat = heroMaterial(this.u);
+    this.glowMat = glowBasic({ color: 0xffffff });
+    this.disposables.push(this.mat, this.glowMat);
+    // a GLB from the asset manifest replaces the sculpt when present (same rig names and sockets)
+    const geo = loadedModel('hero')?.geometry ?? heroGeometry();
+    this.mesh = new THREE.SkinnedMesh(geo, this.mat);
+    this.mesh.add(this.bones[BONE.body]);
+    this.mesh.bind(rig.skeleton);
+    this.mesh.castShadow = true;
+    this.mesh.frustumCulled = false;
+    this.root.add(this.mesh);
+    this.disposables.push(rig.skeleton);
 
-    const geo = <T extends THREE.BufferGeometry>(g: T) => (this.disposables.push(g), g);
-    const mesh = (g: THREE.BufferGeometry, m: THREE.Material) => new THREE.Mesh(geo(g), m);
-    const capsule = (r: number, len: number, mat: THREE.Material, dy = 0) => {
-      const m = mesh(new THREE.CapsuleGeometry(r, len, 5, 10), mat);
-      m.position.y = dy;
-      return m;
-    };
-    /** Tapered, slightly muscled limb hanging down from its pivot. */
-    const limb = (r0: number, r1: number, len: number, mat: THREE.Material, bulge = 0.2) => {
-      const pts: THREE.Vector2[] = [new THREE.Vector2(0.001, r0 * 0.6)];
-      for (let i = 0; i <= 10; i++) {
-        const t = i / 10;
-        pts.push(new THREE.Vector2((r0 + (r1 - r0) * t) * (1 + bulge * Math.sin(Math.min(1, t * 1.3) * Math.PI)), -len * t));
-      }
-      pts.push(new THREE.Vector2(0.001, -len - r1 * 0.7));
-      return mesh(new THREE.LatheGeometry(pts, 12), mat);
-    };
-
-    this.root.add(this.body);
-    this.body.add(this.hips);
-    this.hips.position.y = 0.98;
-
-    // pelvis
-    const pelvis = mesh(new THREE.SphereGeometry(0.15, 14, 10), this.armorMat);
-    pelvis.scale.set(1.15, 0.72, 0.85);
-    this.hips.add(pelvis);
-
-    // legs
-    const makeLeg = (thigh: THREE.Group, knee: THREE.Group, side: number) => {
-      thigh.position.set(side * 0.105, -0.05, 0);
-      thigh.add(limb(0.082, 0.052, 0.44, this.skinMat, 0.22));
-      const thighGuard = mesh(new THREE.CapsuleGeometry(0.07, 0.17, 4, 8), this.armorMat);
-      thighGuard.position.set(0, -0.15, 0.012);
-      thigh.add(thighGuard);
-      knee.position.y = -0.44;
-      knee.add(limb(0.055, 0.036, 0.43, this.skinMat, 0.25));
-      const greave = mesh(new THREE.CapsuleGeometry(0.052, 0.16, 4, 8), this.armorMat);
-      greave.position.set(0, -0.2, 0.012);
-      knee.add(greave);
-      const foot = mesh(new THREE.CapsuleGeometry(0.048, 0.14, 4, 8), this.armorMat);
-      foot.rotation.x = Math.PI / 2;
-      foot.position.set(0, -0.46, 0.06);
-      knee.add(foot);
-      const kneeGlow = mesh(new THREE.SphereGeometry(0.03, 8, 6), this.glowMat);
-      kneeGlow.position.set(0, 0, 0.06);
-      knee.add(kneeGlow);
-      thigh.add(knee);
-      this.hips.add(thigh);
-    };
-    makeLeg(this.thL, this.knL, -1);
-    makeLeg(this.thR, this.knR, 1);
-
-    // spine / torso
-    this.hips.add(this.spine);
-    this.spine.position.y = 0.1;
-    const prof = [[0.001, -0.02], [0.115, 0], [0.1, 0.14], [0.125, 0.3], [0.16, 0.46], [0.15, 0.58], [0.085, 0.65], [0.001, 0.67]].map(([r, y]) => new THREE.Vector2(r, y));
-    const torso = mesh(new THREE.LatheGeometry(prof, 18), this.skinMat);
-    torso.scale.set(1, 1, 0.72);
-    this.spine.add(torso);
-    const chest = mesh(new THREE.SphereGeometry(0.175, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.7), this.armorMat);
-    chest.scale.set(1.0, 0.85, 0.7);
-    chest.position.set(0, 0.4, 0.03);
-    this.spine.add(chest);
-    const ridge = mesh(new THREE.BoxGeometry(0.012, 0.3, 0.012), this.glowMat);
-    ridge.position.set(0, 0.42, 0.145);
-    this.spine.add(ridge);
-    const core = mesh(new THREE.OctahedronGeometry(0.045, 0), this.glowMat);
-    core.position.set(0, 0.44, 0.15);
-    this.spine.add(core);
-    const belt = mesh(new THREE.TorusGeometry(0.135, 0.016, 6, 20), this.glowMat);
-    belt.rotation.x = Math.PI / 2;
-    belt.position.y = 0.08;
-    belt.scale.set(1, 0.8, 1);
-    this.spine.add(belt);
-    // thruster backpack ("Fractal Resonance Thruster")
-    const pack = mesh(new THREE.CapsuleGeometry(0.07, 0.24, 4, 8), this.armorMat);
-    pack.position.set(0, 0.36, -0.17);
-    this.spine.add(pack);
-    const jet = mesh(new THREE.ConeGeometry(0.04, 0.12, 8), this.glowMat);
-    jet.rotation.x = Math.PI;
-    jet.position.set(0, 0.2, -0.19);
-    this.spine.add(jet);
-
-    // head
-    this.spine.add(this.head);
-    this.head.position.y = 0.72;
-    const neck = capsule(0.04, 0.05, this.skinMat, -0.06);
-    this.head.add(neck);
-    const skull = mesh(new THREE.SphereGeometry(0.108, 18, 14), this.skinMat);
-    skull.scale.set(0.9, 1.22, 1.02);
-    skull.position.y = 0.07;
-    this.head.add(skull);
-    const visor = mesh(new THREE.SphereGeometry(0.1, 14, 10, 0, Math.PI, 0.9, 0.7), this.glowMat);
-    visor.rotation.y = 0;
-    visor.scale.set(0.95, 0.75, 1.0);
-    visor.position.set(0, 0.075, 0.02);
-    this.head.add(visor);
-    // crown tendrils: five trailing strands of four segments
-    for (let i = 0; i < 5; i++) {
-      const strand: THREE.Group[] = [];
-      const base = new THREE.Group();
-      const a = (i / 5) * Math.PI * 1.2 - Math.PI * 0.6;
-      base.position.set(Math.sin(a) * 0.07, 0.16, -0.045 - Math.cos(a) * 0.01);
-      base.rotation.set(-0.5, 0, Math.sin(a) * 0.5);
-      let parent: THREE.Object3D = base;
-      for (let j = 0; j < 4; j++) {
-        const seg = new THREE.Group();
-        const m = mesh(new THREE.CapsuleGeometry(0.014 - j * 0.002, 0.12, 3, 5), j === 3 ? this.glowMat : this.skinMat);
-        m.position.y = 0.06;
-        seg.add(m);
-        seg.position.y = j === 0 ? 0 : 0.12;
-        parent.add(seg);
-        strand.push(seg);
-        parent = seg;
-      }
-      this.head.add(base);
-      this.tendrils.push(strand);
-    }
-
-    // arms
-    const makeArm = (sh: THREE.Group, el: THREE.Group, side: number) => {
-      sh.position.set(side * 0.23, 0.58, 0);
-      const pad = mesh(new THREE.SphereGeometry(0.1, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.62), this.armorMat);
-      pad.scale.set(1.15, 0.9, 1.05);
-      pad.position.y = 0.035;
-      sh.add(pad);
-      const spike = mesh(new THREE.ConeGeometry(0.03, 0.14, 5), this.glowMat);
-      spike.position.set(side * 0.07, 0.1, 0);
-      spike.rotation.z = -side * 0.9;
-      sh.add(spike);
-      sh.add(limb(0.052, 0.04, 0.33, this.skinMat, 0.2));
-      el.position.y = -0.33;
-      el.add(limb(0.04, 0.03, 0.3, this.skinMat, 0.22));
-      const bracer = mesh(new THREE.CapsuleGeometry(0.05, 0.14, 4, 8), this.armorMat);
-      bracer.position.y = -0.2;
-      el.add(bracer);
-      const hand = mesh(new THREE.SphereGeometry(0.045, 10, 8), this.skinMat);
-      hand.position.y = -0.37;
-      el.add(hand);
-      sh.add(el);
-      this.spine.add(sh);
-    };
-    makeArm(this.shL, this.elL, -1);
-    makeArm(this.shR, this.elR, 1);
-    this.handR.position.y = -0.37;
-    this.elR.add(this.handR);
-
-    // spore bolter orb (visible while aiming)
-    this.bolter = mesh(new THREE.IcosahedronGeometry(0.075, 1), this.glowMat);
+    this.grip.position.set(0, -0.06, 0.012);
+    this.bones[BONE.hdR].add(this.grip);
+    this.bolter = new THREE.Mesh(new THREE.IcosahedronGeometry(0.075, 1), this.glowMat);
+    this.disposables.push(this.bolter.geometry);
     this.bolter.visible = false;
-    this.handR.add(this.bolter);
-
-    // Root-Blade: shaft, living-wood wrap, leaf blade
-    const shaft = mesh(new THREE.CylinderGeometry(0.014, 0.018, 1.25, 6), this.armorMat);
-    this.blade.add(shaft);
-    for (let i = 0; i < 4; i++) {
-      const ring = mesh(new THREE.TorusGeometry(0.03, 0.007, 5, 10), this.bladeMat);
-      ring.rotation.x = Math.PI / 2;
-      ring.position.y = -0.3 + i * 0.14;
-      this.blade.add(ring);
-    }
-    const leaf = mesh(new THREE.ConeGeometry(0.06, 0.5, 4), this.bladeMat);
-    leaf.scale.set(1, 1, 0.2);
-    leaf.position.y = 0.88;
-    this.blade.add(leaf);
-    const tip = mesh(new THREE.OctahedronGeometry(0.03, 0), this.bladeMat);
-    tip.position.y = -0.64;
-    this.blade.add(tip);
+    this.grip.add(this.bolter);
+    this.blade = new THREE.Mesh(rootBladeGeometry(), this.mat);
+    this.blade.castShadow = true;
     this.setBlade(false);
-
     this.setSkin(skin);
-    this.root.traverse((o) => {
-      if ((o as THREE.Mesh).isMesh) o.castShadow = true;
-    });
   }
 
-  private makeSkinMat(color: number) {
-    const m = standard({ color, roughness: 0.3, metalness: 0.1, emissive: 0x06201c, emissiveIntensity: 0.6 });
-    const u = this.u;
-    const o: N = positionGeometry;
-    const hv = sin(o.y.mul(34).add(sin(o.x.mul(22).add(o.z.mul(14))).mul(1.9)).add(u.uT.mul(0.8)));
-    const vein = smoothstep(0.93, 0.995, hv).mul(sin(o.x.mul(40).add(o.z.mul(31))).mul(0.45).add(0.55));
-    // Data-Stream suit: light flows up the veins at the blueprint's 1.5 Hz pulse
-    const flow = sin(o.y.mul(18).sub(u.uT.mul(1.5 * 6.283))).mul(0.5).add(0.5);
-    m.emissiveNode = materialEmissive
-      .add(u.uVein.mul(vein.mul(sin(u.uT.mul(2)).mul(0.4).add(1.1)).mul(flow.mul(0.6).add(0.6)).add(fresnel(2.4).mul(0.5))))
-      .add(vec3(1, 0.25, 0.35).mul(u.uHurt));
-    return m;
+  /** Socket transforms named in the asset manifest (hand_r_root_blade, back_thruster_pack, head_antenna). */
+  socket(name: string): THREE.Object3D | null {
+    if (name === 'hand_r_root_blade') return this.grip;
+    if (name === 'back_thruster_pack') return this.bones[BONE.chest];
+    if (name === 'head_antenna') return this.bones[BONE.crest + Math.floor(CREST_STRANDS / 2) * CREST_SEGS + CREST_SEGS - 1];
+    return null;
   }
 
   setSkin(skin: Skin) {
     const l = SKIN_LOOK[skin];
-    this.skinMat.color.set(l.body);
-    this.armorMat.color.set(l.armor);
-    this.armorMat.emissive.set(l.vein);
-    this.veinCol.set(l.vein);
-    this.u.uVein.value.copy(this.veinCol);
+    applyLook(this.u, l);
     this.glowMat.color.set(l.vein).multiplyScalar(2.2);
-    this.bladeMat.color.set(l.accent).multiplyScalar(2.2);
   }
 
-  /** Put the blade in the right hand (true) or on the back (false). */
+  /** Put the blade in the right hand (true) or across the back (false). */
   private setBlade(held: boolean) {
     if (held === this.held && this.blade.parent) return;
     this.held = held;
     this.blade.removeFromParent();
     if (held) {
-      this.handR.add(this.blade);
+      this.grip.add(this.blade);
       this.blade.position.set(0, 0.2, 0.02);
       this.blade.rotation.set(Math.PI / 2 - 0.25, 0, 0);
     } else {
-      this.spine.add(this.blade);
-      this.blade.position.set(0.02, 0.4, -0.24);
-      this.blade.rotation.set(0.25, 0, 0.7);
+      this.bones[BONE.chest].add(this.blade);
+      this.blade.position.set(0.02, 0.05, -0.17);
+      this.blade.rotation.set(0.2, 0, 0.62);
     }
   }
 
@@ -307,7 +138,7 @@ export class Hero {
   }
 
   handWorld(out: THREE.Vector3) {
-    return this.handR.getWorldPosition(out);
+    return this.grip.getWorldPosition(out);
   }
 
   update(dt: number, p: HeroPose) {
@@ -424,29 +255,85 @@ export class Hero {
     const k = 1 - Math.exp(-dt * (attacking ? 30 : 15));
     for (const key of KEYS) this.cur[key] += (t[key] - this.cur[key]) * k;
     const c = this.cur;
-    this.body.rotation.set(c.bodyX, 0, c.bodyZ);
-    this.body.position.y = p.dead ? 0.15 : 0;
-    this.hips.position.y = 0.98 + c.hipsY;
-    this.spine.rotation.set(c.spX, c.spY, c.spZ);
-    this.head.rotation.set(c.headX, c.headY, 0);
-    this.thL.rotation.set(c.thLx, 0, c.thLz);
-    this.thR.rotation.set(c.thRx, 0, c.thRz);
-    this.knL.rotation.x = c.knL;
-    this.knR.rotation.x = c.knR;
-    this.shL.rotation.set(c.shLx, 0, c.shLz);
-    this.shR.rotation.set(c.shRx, 0, c.shRz);
-    this.elL.rotation.x = -c.elL;
-    this.elR.rotation.x = -c.elR;
+    const B = this.bones;
+    B[BONE.body].rotation.set(c.bodyX, 0, c.bodyZ);
+    B[BONE.body].position.y = p.dead ? 0.15 : 0;
+    B[BONE.hips].position.y = 0.98 + c.hipsY;
+    // the spine bends over two bones so the abdomen deforms smoothly
+    B[BONE.spine].rotation.set(c.spX * 0.55, c.spY * 0.5, c.spZ * 0.5);
+    B[BONE.chest].rotation.set(c.spX * 0.45, c.spY * 0.5, c.spZ * 0.5);
+    B[BONE.head].rotation.set(c.headX, c.headY, 0);
+    B[BONE.thL].rotation.set(c.thLx, 0, c.thLz);
+    B[BONE.thR].rotation.set(c.thRx, 0, c.thRz);
+    B[BONE.knL].rotation.x = c.knL;
+    B[BONE.knR].rotation.x = c.knR;
+    B[BONE.shL].rotation.set(c.shLx, 0, c.shLz);
+    B[BONE.shR].rotation.set(c.shRx, 0, c.shRz);
+    B[BONE.elL].rotation.x = -c.elL;
+    B[BONE.elR].rotation.x = -c.elR;
+    B[BONE.hdL].rotation.x = -c.elL * 0.15;
+    B[BONE.hdR].rotation.x = -c.elR * 0.15;
 
-    // tendrils: lag behind motion, stream back in flight
+    const planted = p.grounded && p.mode === 'ground' && !p.dead;
+    this.plantFeet(dt, p, planted && !p.dashing);
+
+    // feet: level with the ground while planted, pointed in the air
+    const footL = planted ? -(c.bodyX + B[BONE.thL].rotation.x + B[BONE.knL].rotation.x) : 0.55;
+    const footR = planted ? -(c.bodyX + B[BONE.thR].rotation.x + B[BONE.knR].rotation.x) : 0.45;
+    this.foot[0] += (footL - this.foot[0]) * k;
+    this.foot[1] += (footR - this.foot[1]) * k;
+    B[BONE.ftL].rotation.x = this.foot[0];
+    B[BONE.ftR].rotation.x = this.foot[1];
+
+    // crest: antler strands sway, lag behind motion and stream back in flight
     const stream = p.mode === 'flight' ? 1 : clamp(sp, 0, 1);
-    for (let i = 0; i < this.tendrils.length; i++) {
-      const strand = this.tendrils[i];
-      for (let j = 0; j < strand.length; j++) {
-        const sway = Math.sin(this.time * (1.8 + i * 0.3) + j * 0.9 + i) * 0.22;
-        strand[j].rotation.x = -0.1 - stream * 0.35 + sway * 0.5;
-        strand[j].rotation.z = Math.sin(this.time * 1.4 + i * 1.7 + j) * 0.2;
+    for (let i = 0; i < CREST_STRANDS; i++) {
+      for (let j = 0; j < CREST_SEGS; j++) {
+        const b = B[BONE.crest + i * CREST_SEGS + j];
+        const sway = Math.sin(this.time * (1.8 + i * 0.3) + j * 0.9 + i) * 0.12;
+        b.rotation.x = -stream * 0.22 + sway * (0.4 + j * 0.3);
+        b.rotation.z = Math.sin(this.time * 1.4 + i * 1.7 + j) * 0.08 * (j + 1);
       }
+    }
+  }
+
+  /**
+   * Two-bone IK foot planting: each ankle is moved by the ground offset under it (relative to the ground under
+   * the root), the hips drop to let the lower leg reach, and thigh/knee angles are solved analytically.
+   */
+  private plantFeet(dt: number, p: HeroPose, on: boolean) {
+    this.ikW += ((on && p.ground ? 1 : 0) - this.ikW) * (1 - Math.exp(-dt * 8));
+    if (this.ikW < 0.01 || !p.ground) return;
+    const B = this.bones;
+    this.root.updateWorldMatrix(true, true);
+    const rootY = this.root.getWorldPosition(_a).y;
+    const legs = [[BONE.thL, BONE.knL, BONE.ftL], [BONE.thR, BONE.knR, BONE.ftR]];
+    const want = [0, 0];
+    for (let i = 0; i < 2; i++) {
+      B[legs[i][2]].getWorldPosition(_a);
+      want[i] = clamp(p.ground(_a.x, _a.z) - rootY, -0.3, 0.3);
+    }
+    const kk = 1 - Math.exp(-dt * 12);
+    for (let i = 0; i < 2; i++) this.ikOff[i] += (want[i] - this.ikOff[i]) * kk;
+    const drop = Math.min(0, this.ikOff[0], this.ikOff[1]) * this.ikW;
+    B[BONE.hips].position.y += drop;
+    this.root.updateWorldMatrix(true, true);
+    const L1 = LEG.thigh, L2 = LEG.shin;
+    for (let i = 0; i < 2; i++) {
+      const [th, kn, ft] = legs[i].map((b) => B[b]);
+      ft.getWorldPosition(_t);
+      _t.y += this.ikOff[i] * this.ikW;
+      B[BONE.hips].worldToLocal(_t);
+      const dx = _t.x - th.position.x, dy = _t.y - th.position.y, dz = _t.z - th.position.z;
+      const D = clamp(Math.hypot(dx, dy, dz), 0.2, L1 + L2 - 0.002);
+      const kb = Math.PI - Math.acos(clamp((L1 * L1 + L2 * L2 - D * D) / (2 * L1 * L2), -1, 1));
+      const beta = Math.atan2(L2 * Math.sin(kb), L1 + L2 * Math.cos(kb));
+      const z = Math.atan2(dx, Math.hypot(dy, dz));
+      const x = Math.atan2(-dz, -dy) - beta;
+      const w = this.ikW;
+      th.rotation.x = lerp(th.rotation.x, x, w);
+      th.rotation.z = lerp(th.rotation.z, z, w);
+      kn.rotation.x = lerp(kn.rotation.x, kb, w);
     }
   }
 

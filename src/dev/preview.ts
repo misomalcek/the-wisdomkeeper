@@ -39,8 +39,19 @@ const heroes = poses.map((o, i) => {
   return { h, p };
 });
 const cam = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 100);
-const grp = Number(new URLSearchParams(location.search).get('g') ?? -1);
-if (grp >= 0) {
+const qs = new URLSearchParams(location.search);
+const grp = Number(qs.get('g') ?? -1);
+const solo = qs.get('solo');
+if (solo !== null) {
+  // turntable close-up of one pose: ?solo=<pose index>&yaw=<radians>
+  heroes.forEach(({ h }, i) => {
+    h.root.visible = i === Number(solo);
+    h.root.position.x = 0;
+    h.root.rotation.y = Number(qs.get('yaw') ?? 0);
+  });
+  cam.position.set(0, 1.25, 3.6);
+  cam.lookAt(0, 1.05, 0);
+} else if (grp >= 0) {
   const cx = (grp * 4 + 1.5 - (poses.length - 1) / 2) * 2.2;
   cam.position.set(cx, 1.5, 5.2);
   cam.lookAt(cx, 1.1, 0);
@@ -57,3 +68,17 @@ function loop() {
   (window as unknown as { ready: number }).ready = t;
 }
 loop();
+
+// ?fiend: a Void-Root Fiend beside the hero for scale and material checks
+if (qs.has('fiend')) {
+  const { Enemy } = await import('../entities/enemies');
+  const e = new Enemy('brute', 0, 0, 1, 0);
+  e.group.scale.setScalar(1);
+  e.group.position.set(1.6, 0, -1.5);
+  e.group.rotation.y = -0.5;
+  scene.add(e.group);
+  heroes.forEach(({ h }, i) => (h.root.visible = i === 0));
+  heroes[0].h.root.position.set(-1.2, 0, 0);
+  cam.position.set(0, 2.2, 7.5);
+  cam.lookAt(0, 1.6, 0);
+}

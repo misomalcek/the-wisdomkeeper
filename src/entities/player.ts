@@ -100,6 +100,7 @@ export class Player {
   /** Height of the surface under the hero (terrain or platform). */
   groundY = 0;
   private fallV = 0;
+  private probe: ((x: number, z: number) => number) | null = null;
 
   constructor(skin: 'resonant' | 'verdant' | 'void' = 'resonant') {
     this.hero = new Hero(skin);
@@ -344,6 +345,10 @@ export class Player {
     pose.hurt = this.hurtT > 0 ? this.hurtT / 0.6 : 0;
     pose.dead = this.dead;
     pose.bank = this.bank;
+    // foot planting reads the terrain only while standing on it (platforms are flat)
+    const terr = g.world.terrain;
+    const onTerrain = Math.abs(gh - terr.heightAt(this.x, this.z)) < 0.15;
+    pose.ground = onTerrain ? (this.probe ??= (x: number, z: number) => g.world.terrain.heightAt(x, z)) : null;
     this.hero.update(dt, pose);
     this.group.visible = !(this.invuln > 0 && this.hurtT > 0 && Math.sin(g.time * 50) > 0) || this.dead;
     this.blob.position.set(this.x, gh + 0.08, this.z);
