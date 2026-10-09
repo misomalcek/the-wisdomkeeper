@@ -23,7 +23,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Enable Pages (best effort; set Settings → Pages → Source: GitHub Actions if this fails)
+      - name: Enable Pages (best effort)
         uses: actions/configure-pages@v5
         with:
           enablement: true
