@@ -31,6 +31,7 @@ import { AFFINITY_COLOR } from './entities/echoes';
 import type { MemoryNode, Pylon } from './world/structures';
 import { clamp, damp } from './util/math';
 import { updateOcclusion } from './world/occlusion';
+import { DatastreamDais } from './world/contact';
 import { TraversalUI, type TravMode } from './ui/traversal-ui';
 import { MAX_FIBER, TETHER_RANGE } from './entities/player';
 import type { TetherAnchor } from './world/traversal';
@@ -337,7 +338,8 @@ export class Game {
   // ---------------------------------------------------------------- run lifecycle
 
   private newRun(cycle: number) {
-    const seed = (Math.random() * 0xffffffff) >>> 0;
+    const fixed = Number(new URLSearchParams(location.search).get('seed'));
+    const seed = fixed > 0 ? fixed >>> 0 : (Math.random() * 0xffffffff) >>> 0;
     const rand = Math.random;
     const blade = generateItem(rand, 1, 'common', 'blade');
     blade.name = 'Root-Blade Unit';
@@ -442,6 +444,8 @@ export class Game {
   }
 
   private buildWorld(def: StratumDef) {
+    this.daises.forEach((d) => d.dispose());
+    this.daises.clear();
     if (this.world) {
       this.gfx.scene.remove(this.world.group);
       this.world.dispose();
@@ -666,6 +670,10 @@ export class Game {
       console.error(err);
     }
     this.particles.setScale(this.gfx.pointScale);
+    if (this.debugPhoto) {
+      this.gfx.camera.position.copy(this.debugPhoto.from);
+      this.gfx.camera.lookAt(this.debugPhoto.to);
+    }
     this.gfx.camera.updateMatrixWorld();
     this.gfx.followShadow(this.player.x, this.player.y, this.player.z);
     updateOcclusion(this.gfx.renderer, this.gfx.camera, this.tmp.set(this.player.x, this.player.y + 1, this.player.z));
@@ -1297,8 +1305,17 @@ export class Game {
   /** Datastream contacts: a column of rising glyph-light the hero must reach. */
   private updateMissionSites(dt: number) {
     const p = this.player;
+    const live = new Set<number>();
     for (const m of this.activeMissions()) {
       if (m.kind !== 'contact' || m.state !== 'active') continue;
+      live.add(m.id);
+      let dais = this.daises.get(m.id);
+      if (!dais) {
+        dais = new DatastreamDais(m.x, this.world.terrain.heightAt(m.x, m.z) - 0.1, m.z, new THREE.Color(this.world.palette.accent), m.id + 3);
+        this.daises.set(m.id, dais);
+        this.world.group.add(dais.group);
+      }
+      dais.update(this.time, this.gfx.camera.position);
       const d = Math.hypot(m.x - p.x, m.z - p.z);
       if (d < 7) {
         this.player.res = this.derived.maxRes;
@@ -1311,7 +1328,14 @@ export class Game {
       const a = Math.random() * Math.PI * 2;
       this.particles.emit(m.x + Math.cos(a) * 1.2, y + Math.random() * 2, m.z + Math.sin(a) * 1.2, 0, 6 + Math.random() * 4, 0, this.palette.accentHDR, 0.45, 2.6, 0.2, 0);
     }
+    for (const [id, dais] of this.daises) {
+      if (live.has(id)) continue;
+      dais.group.removeFromParent();
+      dais.dispose();
+      this.daises.delete(id);
+    }
   }
+  private daises = new Map<number, DatastreamDais>();
 
   // ---------------------------------------------------------------- Act IV: the Veil of Void
 
@@ -2258,6 +2282,8 @@ export class Game {
 
   // ---------------------------------------------------------------- debug (enabled with ?debug)
 
+  /** Dev screenshots: pin the render camera (null hands it back to the follow camera). */
+  debugPhoto: { from: THREE.Vector3; to: THREE.Vector3 } | null = null;
   debugGoto(index: number) {
     this.ui.hideAll();
     this.audio.init();

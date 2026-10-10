@@ -267,10 +267,11 @@ export function buildFlora(def: StratumDef, terrain: Terrain, rng: Rng, density:
         const x = gv.x + Math.cos(a) * r;
         const z = gv.z + Math.sin(a) * r;
         if (terrain.riverAt(x, z) > 0.2 || Math.hypot(x, z) > R * 0.97) continue;
+        if (avoid.some((v) => v.r >= 12 && (v.x - x) ** 2 + (v.z - z) ** 2 < v.r * v.r)) continue; // set-piece clearings
         const p = new THREE.Vector3(x, terrain.heightAt(x, z), z);
         const len = rng.range(3.5, 6.5);
         const lean = new THREE.Vector3(rng.range(-0.25, 0.25), 1, rng.range(-0.25, 0.25)).normalize();
-        growTree(p, lean, len, 0.4 + len * 0.04, 4, 4, branchesDead, tipsDead, trunkCol, budCol, [0xff3b7a, 0xff7a3b], [1.1, 1.8], 1.25);
+        growTree(p, lean, len, 0.4 + len * 0.04, 4, 4, branchesDead, tipsDead, trunkCol, budCol, [0xff3b7a, 0xff7a3b], [0.55, 0.95], 1.25);
         colliders.add(x, z, 0.65);
       }
     }

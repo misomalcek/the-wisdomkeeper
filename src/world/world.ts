@@ -247,12 +247,13 @@ export class World {
       ...(veilLayout ? [{ x: veilLayout.tree.x, z: veilLayout.tree.z, r: 16 }, ...veilLayout.caps.filter((c) => c.y - this.terrain.heightAt(c.x, c.z) < 6).map((c) => ({ x: c.x, z: c.z, r: c.r + 0.5 }))] : []),
       { x: startXZ.x, z: startXZ.y, r: 8 },
       { x: gateXZ.x, z: gateXZ.y, r: 10 },
-      ...nodeXZ.map((p) => ({ x: p.x, z: p.y, r: 8 })),
+      ...nodeXZ.map((p) => ({ x: p.x, z: p.y, r: def.contacts ? 13 : 8 })),
       ...pylonXZ.map((p) => ({ x: p.x, z: p.y, r: 9 })),
       ...cachesXZ.map((p) => ({ x: p.x, z: p.y, r: 3 })),
       ...mushXZ.map((p) => ({ x: p.x, z: p.y, r: 8.5 })),
       ...crystalXZ.map((p) => ({ x: p.x, z: p.y, r: 2.5 })),
     ];
+    this.wilds?.keepOut.push(...avoid.filter((a) => a.r >= 8).map((a) => ({ x: a.x, z: a.z, r: a.r + 4 })));
     this.flora = buildFlora(def, this.terrain, rng.fork('flora'), params.floraDensity, avoid, this.colliders, campXZ.map((c) => ({ x: c.x, z: c.z, r: c.r })));
     this.group.add(this.flora.group);
 
@@ -269,7 +270,8 @@ export class World {
     this.group.add(this.grove.group);
 
     nodeXZ.forEach((p, i) => {
-      const n = new MemoryNode(this.palette, this.terrain, p.x, p.y, i, def.id === 'return');
+      const n = new MemoryNode(this.palette, this.terrain, p.x, p.y, i, def.id === 'return', !!def.contacts);
+      if (n.pad && veilLayout) n.pad.setArcTarget(new THREE.Vector3(veilLayout.tree.x, this.terrain.heightAt(veilLayout.tree.x, veilLayout.tree.z) + 14, veilLayout.tree.z), n.pos);
       this.nodes.push(n);
       this.group.add(n.group);
       this.mycelium.addTarget(p.x, p.y);
@@ -301,7 +303,7 @@ export class World {
         }
       };
       ring(gateXZ.x, gateXZ.y, 6, 11);
-      for (const p of nodeXZ) ring(p.x, p.y, 2, 7);
+      for (const p of nodeXZ) ring(p.x, p.y, 2, 12);
       ring(veilLayout.tree.x, veilLayout.tree.z, 4, 15);
       const v = new VeilSetPiece(veilLayout, this.palette, rng.fork('veilfx'), cols);
       (this as { veil: VeilSetPiece | null }).veil = v;
@@ -405,7 +407,7 @@ export class World {
     this.mushrooms.update(t);
     this.drift.update(t);
     this.props.update(t);
-    for (const n of this.nodes) n.update(dt, t);
+    for (const n of this.nodes) n.update(dt, t, camPos);
     for (const p of this.pylons) p.update(dt, t);
     for (const c of this.caches) c.update(dt, t);
 

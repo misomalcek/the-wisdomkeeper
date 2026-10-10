@@ -134,27 +134,28 @@ export class Terrain {
 
     // ---- emission
     const fadeNear = float(1).sub(sstep(26, 70, dist));
-    const lines = gridLine(0.25).mul(0.35).add(gridLine(0.05).mul(0.9)).mul(u.grid).mul(glow.mul(1.5).add(0.3)).mul(fadeNear);
+    const lines = gridLine(0.25).mul(0.25).add(gridLine(0.05).mul(0.55)).mul(u.grid).mul(glow.mul(1.5).add(0.3)).mul(fadeNear);
     let emit: N = mix(u.accent, u.accent2, sin(w.x.mul(0.05).add(t.mul(0.2))).mul(0.5).add(0.5)).mul(lines);
     emit = emit.add(u.accent.mul(glow).mul(0.05));
 
     // bioluminescent data streams threading the ground, pulsing along their length
     const w1 = w.x.mul(0.11).add(sin(w.z.mul(0.07)).mul(3)).add(sin(w.z.mul(0.19).add(1.3)).mul(1.3));
     const w2 = w.z.mul(0.09).add(sin(w.x.mul(0.08).add(2)).mul(2.6)).add(sin(w.x.mul(0.21)).mul(1.1));
-    const f1 = sstep(0.045, 0, abs(fract(w1).sub(0.5)));
-    const f2 = sstep(0.04, 0, abs(fract(w2).sub(0.5)));
+    const f1 = sstep(0.018, 0, abs(fract(w1).sub(0.5)));
+    const f2 = sstep(0.016, 0, abs(fract(w2).sub(0.5)));
     const l1 = f1.mul(sin(w.z.mul(0.9).sub(t.mul(2.2)).add(w1.mul(6))).mul(0.5).add(0.5));
     const l2 = f2.mul(sin(w.x.mul(0.8).add(t.mul(1.9)).add(w2.mul(5))).mul(0.5).add(0.5));
     const nearF = float(1).sub(sstep(35, 95, dist));
-    emit = emit.add(mix(u.accent, u.accent2, sin(w1).mul(0.5).add(0.5)).mul(l1.add(l2.mul(0.7))).mul(0.5).mul(u.stream).mul(nearF));
+    const runs = sstep(0.38, 0.6, fbm2(w.xz.mul(0.06))); // streams surface in runs, not everywhere
+    emit = emit.add(mix(u.accent, u.accent2, sin(w1).mul(0.5).add(0.5)).mul(l1.add(l2.mul(0.7))).mul(runs.mul(0.6).add(0.15)).mul(u.stream).mul(nearF));
     // footfalls conduct along the filaments (Fractal-Neural "Terrain Conduction Interface")
     emit = emit.add(conduction(vec3(0), color(0x3a6bff), max(f1, f2).add(lines.mul(0.5))).mul(float(1).sub(cor)));
 
     // Null corruption: creeping veins
     const vv = abs(sin(w.x.mul(0.9).add(sin(w.z.mul(0.7).add(t.mul(0.3))).mul(2.2)))).mul(abs(sin(w.z.mul(0.8).add(sin(w.x.mul(0.5)).mul(1.7)))));
-    const veins = pow(float(1).sub(vv), float(9));
+    const veins = pow(float(1).sub(vv), float(16)).mul(sstep(0.42, 0.62, fbm2(w.xz.mul(0.11).add(t.mul(0.02))))); // broken into creeping patches
     const cpulse = sin(t.mul(1.6).add(w.x.mul(0.1))).mul(0.4).add(0.6);
-    emit = mix(emit, emit.mul(0.25), cor).add(u.nullCol.mul(veins.mul(0.75).mul(cpulse).add(0.03)).mul(cor));
+    emit = mix(emit, emit.mul(0.25), cor).add(u.nullCol.mul(veins.mul(0.5).mul(cpulse).add(0.02)).mul(cor));
 
     // river of light
     const flow = sin(w.z.mul(0.7).sub(t.mul(2.2)).add(sin(w.x.mul(0.6)).mul(1.5))).mul(0.5).add(0.5);

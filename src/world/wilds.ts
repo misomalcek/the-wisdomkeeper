@@ -140,6 +140,8 @@ export class Wilds {
   private lastCx = 1e9;
   private lastCz = 1e9;
   private harvested = new Set<string>();
+  /** Clearings the Wilds leave open around set pieces (Contacts, Pylons, the Elder Tree). */
+  readonly keepOut: { x: number; z: number; r: number }[] = [];
   /** Pickups waiting for the game to place them (drained every frame). */
   readonly pickups: WildPickup[] = [];
   built = 0;
@@ -265,6 +267,7 @@ export class Wilds {
         const x = x0 + (i + rng.range(0.15, 0.85)) * cell;
         const z = z0 + (j + rng.range(0.15, 0.85)) * cell;
         if (!this.wildAt(x, z) || t.riverAt(x, z) > 0.05) continue;
+        if (this.keepOut.some((k) => (x - k.x) ** 2 + (z - k.z) ** 2 < k.r * k.r)) continue;
         const b = field.biomeAt(x, z);
         const y = t.heightAt(x, z);
         const slope = t.slopeAt(x, z);

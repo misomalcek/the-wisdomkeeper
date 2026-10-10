@@ -5,6 +5,7 @@ import { Fn, uniform, uv, float, vec2, vec3, abs, max, dot, sin, exp, clamp, mix
 import type { Palette } from '../story/strata';
 import type { Terrain } from './terrain';
 import { damp } from '../util/math';
+import { ContactPad } from './contact';
 
 const hdr = (hex: number, k: number) => new THREE.Color(hex).multiplyScalar(k);
 
@@ -120,8 +121,10 @@ export class MemoryNode {
   private cActive: THREE.Color;
   private cDone: THREE.Color;
   private cur = new THREE.Color();
+  /** Act IV: the node is a Resonance Contact pad instead of a crystal. */
+  readonly pad: ContactPad | null = null;
 
-  constructor(palette: Palette, terrain: Terrain, x: number, z: number, index: number, golden = false) {
+  constructor(palette: Palette, terrain: Terrain, x: number, z: number, index: number, golden = false, contact = false) {
     this.index = index;
     const y = terrain.heightAt(x, z);
     this.pos.set(x, y, z);
@@ -151,6 +154,17 @@ export class MemoryNode {
       standard({ color: 0x1c2a30, metalness: 0.8, roughness: 0.4 }),
     );
     this.group.add(stem);
+    if (contact) {
+      // the vision's Contacts burn cyan: dim while dormant, bright while linking, steady once linked
+      this.cDormant.set(palette.accent).multiplyScalar(0.5);
+      this.cActive.set(palette.accent).multiplyScalar(2.2);
+      this.cDone.set(palette.accent).lerp(new THREE.Color(palette.accent2), 0.3).multiplyScalar(1.6);
+      this.crystalMat.color.copy(this.cDormant);
+      this.pad = new ContactPad(index + 1);
+      this.group.add(this.pad.group);
+      this.crystal.visible = stem.visible = this.baseRing.visible = false;
+      this.shards.forEach((s) => (s.visible = false));
+    }
 
     // Zone outline hugging the terrain
     const pts: number[] = [];
@@ -172,10 +186,15 @@ export class MemoryNode {
     this.state = s;
   }
 
-  update(dt: number, t: number) {
+  update(dt: number, t: number, camPos?: THREE.Vector3) {
     const target = this.state === 'dormant' ? this.cDormant : this.state === 'active' ? this.cActive : this.cDone;
     this.cur.copy(this.crystalMat.color).lerp(target, 1 - Math.exp(-4 * dt));
     this.crystalMat.color.copy(this.cur);
+    if (this.pad) {
+      this.pad.update(dt, t, this.cur, this.state === 'dormant' ? 0 : this.state === 'active' ? 1 : 0.8, camPos);
+      this.zoneMat.opacity = damp(this.zoneMat.opacity, this.state === 'active' ? 0.75 : 0, 5, dt);
+      return;
+    }
     this.shardMat.color.copy(this.cur);
     this.ringMat.color.copy(this.cur);
     const spin = this.state === 'active' ? 3 : this.state === 'done' ? 1.2 : 0.5;
@@ -193,8 +212,10 @@ export class MemoryNode {
   }
 
   dispose() {
+    this.pad?.dispose();
     this.group.traverse((o) => {
       const m = o as THREE.Mesh;
+      if (this.pad && o.parent && isUnder(o, this.pad.group)) return;
       m.geometry?.dispose();
       const mat = m.material as THREE.Material | undefined;
       mat?.dispose?.();
@@ -202,6 +223,10 @@ export class MemoryNode {
   }
 }
 
+const isUnder = (o: THREE.Object3D, root: THREE.Object3D) => {
+  for (let p: THREE.Object3D | null = o; p; p = p.parent) if (p === root) return true;
+  return false;
+};
 
 const ROOT_MAT_COLOR = 0x1a1a14;
 

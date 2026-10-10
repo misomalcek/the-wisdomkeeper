@@ -121,3 +121,25 @@ if (qs.has('enemy')) {
   cam.position.set(0, y + d * 0.12, d);
   cam.lookAt(0, y, 0);
 }
+
+// ?prop=contact&level=<0..1>&yaw&d&y: the Act IV Resonance Contact alone
+if (qs.has('prop')) {
+  const { ContactPad } = await import('../world/contact');
+  heroes.forEach(({ h }) => (h.root.visible = false));
+  const pad = new ContactPad(1);
+  const level = Number(qs.get('level') ?? 1);
+  pad.setArcTarget(new THREE.Vector3(-8, 14, -12), new THREE.Vector3());
+  pad.group.rotation.y = Number(qs.get('yaw') ?? 0);
+  scene.add(pad.group);
+  const c = new THREE.Color(0x40ffe0).multiplyScalar(level > 0.5 ? 2.2 : 0.6);
+  const d = Number(qs.get('d') ?? 11), y = Number(qs.get('y') ?? 2);
+  cam.position.set(0, y + d * 0.3, d);
+  cam.lookAt(0, y, 0);
+  let t = 0;
+  const tick = () => {
+    t += 1 / 60;
+    pad.update(1 / 60, t, c, level, cam.position);
+    requestAnimationFrame(tick);
+  };
+  tick();
+}

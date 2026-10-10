@@ -224,7 +224,7 @@ export class VeilSetPiece {
     const colParts: THREE.BufferGeometry[] = [];
     columns.forEach((p, i) => {
       const h = 16 + (i % 3) * 5;
-      const g = new THREE.CylinderGeometry(1.1, 1.1, h, 14, 1, true).translate(p.x, p.y + h / 2 - 0.5, p.z);
+      const g = new THREE.CylinderGeometry(0.8, 0.8, h, 12, 1, true).translate(p.x, p.y + h / 2 - 0.5, p.z);
       // shift each column's glyph lane so no two read the same
       const uvA = g.attributes.uv as THREE.BufferAttribute;
       const shift = rng.next();
@@ -239,7 +239,7 @@ export class VeilSetPiece {
       const g1: N = texture(glyphs, vec2(st.x, st.y.sub(worldTime.mul(0.35))));
       const fade: N = smoothstep(0, 0.15, positionLocal.y.sub(columns[0]?.y ?? 0).div(6).clamp(0, 1));
       colMat.colorNode = color(pal.accent).mul(g1.r.mul(1.7));
-      colMat.opacityNode = g1.r.mul(0.55).mul(fade.add(0.4).min(1));
+      colMat.opacityNode = g1.r.mul(0.4).mul(fade.add(0.4).min(1));
       glow(colMat);
       const cols = new THREE.Mesh(colGeo, colMat);
       cols.frustumCulled = false;
