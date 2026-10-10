@@ -25,8 +25,9 @@ export function matWeights(id: number, out: Float32Array, o: number, armor = 1) 
 export interface Prim {
   bone: number;
   /** Round cone from a (radius ra) to b (radius rb), in the bone's bind space; ellipsoid; or rounded box
-   * centred on a with half extents `radii`, corner radius `ra` and rotation `rot`. */
-  kind: 'cone' | 'ellipsoid' | 'box';
+   * centred on a with half extents `radii`, corner radius `ra` and rotation `rot`; or a flat-capped cylinder a→b
+   * of radius ra. */
+  kind: 'cone' | 'ellipsoid' | 'box' | 'cyl';
   a: THREE.Vector3;
   b?: THREE.Vector3;
   ra: number;
@@ -42,7 +43,7 @@ export interface Prim {
 }
 
 interface Baked {
-  kind: 0 | 1 | 2;
+  kind: 0 | 1 | 2 | 3;
   bone: number;
   k: number;
   mat: number;
@@ -105,6 +106,19 @@ function sdRoundBox(px: number, py: number, pz: number, p: Baked) {
   return Math.sqrt(ox * ox + oy * oy + oz * oz) + Math.min(Math.max(qx, qy, qz), 0) - p.ra;
 }
 
+/** Flat-capped cylinder a→b, radius ra (iq). */
+function sdCylinder(px: number, py: number, pz: number, p: Baked) {
+  const bax = p.bx - p.ax, bay = p.by - p.ay, baz = p.bz - p.az;
+  const pax = px - p.ax, pay = py - p.ay, paz = pz - p.az;
+  const baba = bax * bax + bay * bay + baz * baz;
+  const paba = pax * bax + pay * bay + paz * baz;
+  const x = Math.hypot(pax * baba - bax * paba, pay * baba - bay * paba, paz * baba - baz * paba) - p.ra * baba;
+  const y = Math.abs(paba - baba * 0.5) - baba * 0.5;
+  const x2 = x * x, y2 = y * y * baba;
+  const d = Math.max(x, y) < 0 ? -Math.min(x2, y2) : (x > 0 ? x2 : 0) + (y > 0 ? y2 : 0);
+  return (Math.sign(d) * Math.sqrt(Math.abs(d))) / baba;
+}
+
 const smin = (a: number, b: number, k: number) => {
   if (k <= 0) return Math.min(a, b);
   const h = Math.max(k - Math.abs(a - b), 0) / k;
@@ -151,14 +165,14 @@ export class Sculpt {
       const mw = bones ? bones[p.bone].matrixWorld : ident;
       mw.decompose(pos, q, s);
       const b: Baked = {
-        kind: p.kind === 'cone' ? 0 : p.kind === 'ellipsoid' ? 1 : 2, bone: p.bone, k: p.k, mat: p.mat, sub: !!p.sub,
+        kind: p.kind === 'cone' ? 0 : p.kind === 'ellipsoid' ? 1 : p.kind === 'box' ? 2 : 3, bone: p.bone, k: p.k, mat: p.mat, sub: !!p.sub,
         ax: 0, ay: 0, az: 0, bx: 0, by: 0, bz: 0, ra: p.ra, rb: p.rb ?? p.ra, m: [], rx: 0, ry: 0, rz: 0,
         min: new THREE.Vector3(), max: new THREE.Vector3(),
       };
       _v.copy(p.a).applyMatrix4(mw);
       b.ax = _v.x; b.ay = _v.y; b.az = _v.z;
       const pad = Math.max(p.k, 0.004) + 0.02;
-      if (p.kind === 'cone') {
+      if (p.kind === 'cone' || p.kind === 'cyl') {
         _w.copy(p.b!).applyMatrix4(mw);
         b.bx = _w.x; b.by = _w.y; b.bz = _w.z;
         const r = Math.max(b.ra, b.rb) + pad;
@@ -183,7 +197,7 @@ export class Sculpt {
   }
 
   private dist(p: Baked, x: number, y: number, z: number) {
-    return p.kind === 0 ? sdRoundCone(x, y, z, p) : p.kind === 1 ? sdEllipsoid(x, y, z, p) : sdRoundBox(x, y, z, p);
+    return p.kind === 0 ? sdRoundCone(x, y, z, p) : p.kind === 1 ? sdEllipsoid(x, y, z, p) : p.kind === 2 ? sdRoundBox(x, y, z, p) : sdCylinder(x, y, z, p);
   }
 
   /** Field value at a point; skips primitives whose padded bounds miss it. */
@@ -328,7 +342,7 @@ export class Sculpt {
     const pos = new Float32Array(P);
     const nor = new Float32Array(nv * 3);
     const mat = new Float32Array(nv * 4);
-    const ao = new Float32Array(nv);
+    const ao = new Float32Array(nv * 2);
     const si = new Uint16Array(nv * 4);
     const sw = new Float32Array(nv * 4);
     const e = cell * 0.5;
@@ -356,7 +370,11 @@ export class Sculpt {
         const h = s * Math.max(cell * 1.5, 0.018);
         occ += w * (h - this.sample(px + (nor[v * 3] * h), py + nor[v * 3 + 1] * h, pz + nor[v * 3 + 2] * h)) / h;
       }
-      ao[v] = Math.min(1, Math.max(0.15, 1 - occ * 0.9));
+      ao[v * 2] = Math.min(1, Math.max(0.15, 1 - occ * 0.9));
+      // mean curvature from the field Laplacian: + on ridges and edges, − in creases (edge wear / grime)
+      const ce = Math.max(cell * 1.5, 0.012);
+      const lap = (this.sample(px + ce, py, pz) + this.sample(px - ce, py, pz) + this.sample(px, py + ce, pz) + this.sample(px, py - ce, pz) + this.sample(px, py, pz + ce) + this.sample(px, py, pz - ce) - 6 * this.sample(px, py, pz)) / (ce * ce);
+      ao[v * 2 + 1] = Math.tanh(lap / 40);
       // material: nearest additive primitive; skin and armour (ids 0/1) blend softly across their border
       let best = 1e9;
       let bm = 0;
@@ -393,7 +411,7 @@ export class Sculpt {
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
     g.setAttribute('aMat', new THREE.BufferAttribute(mat, 4));
-    g.setAttribute('aAO', new THREE.BufferAttribute(ao, 1));
+    g.setAttribute('aAO', new THREE.BufferAttribute(ao, 2));
     g.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4));
     g.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
     g.setIndex(I);
@@ -450,7 +468,9 @@ export function skinnedTube(
   g.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4));
   g.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
   g.setAttribute('aMat', new THREE.BufferAttribute(m, 4));
-  g.setAttribute('aAO', new THREE.BufferAttribute(new Float32Array(n).fill(1), 1));
+  const aoc = new Float32Array(n * 2);
+  for (let i = 0; i < n; i++) aoc[i * 2] = 1;
+  g.setAttribute('aAO', new THREE.BufferAttribute(aoc, 2));
   g.deleteAttribute('uv');
   return g;
 }

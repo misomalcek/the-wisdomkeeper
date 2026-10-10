@@ -20,6 +20,11 @@ const log = (...a) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s]`,
 /** Bake registry: module, geometry factory, optional rig factory, cell (m), triangle budget, output. */
 const JOBS = {
   voidRootFiend: { mod: 'src/assets/fiendModel.ts', geo: 'fiendGeometry', rig: 'buildFiendRig', cell: 0.011, tris: 60000, out: 'models/void-root-fiend.glb' },
+  nullSentryDrone: { mod: 'src/assets/nullModels.ts', geo: 'droneGeometry', cell: 0.0055, tris: 30000, out: 'models/null-sentry-drone.glb' },
+  voidConstruct: { mod: 'src/assets/nullModels.ts', geo: 'constructGeometry', rig: 'buildConstructRig', cell: 0.022, tris: 90000, out: 'models/void-construct.glb' },
+  nullSprite: { mod: 'src/assets/minorModels.ts', geo: 'miteGeometry', cell: 0.0045, tris: 16000, out: 'models/null-sprite.glb' },
+  thornCaster: { mod: 'src/assets/minorModels.ts', geo: 'spitterGeometry', cell: 0.006, tris: 22000, out: 'models/thorn-caster.glb' },
+  dataPylon: { mod: 'src/assets/nullModels.ts', geo: 'dataPylonGeometry', cell: 0.014, tris: 40000, out: 'models/data-pylon.glb' },
 };
 
 async function bake(name, job) {
@@ -38,15 +43,15 @@ async function bake(name, job) {
 
   // simplify: weld-free surface nets output is already indexed; weight normals, AO and material borders
   await MeshoptSimplifier.ready;
-  const attr = new Float32Array(nv * 8);
-  for (let i = 0; i < nv; i++) attr.set([nor[i * 3], nor[i * 3 + 1], nor[i * 3 + 2], ao[i], amat[i * 4], amat[i * 4 + 1], amat[i * 4 + 2], amat[i * 4 + 3]], i * 8);
-  const [lod, err] = MeshoptSimplifier.simplifyWithAttributes(idx, new Float32Array(pos), 3, attr, 8, [0.5, 0.5, 0.5, 0.8, 1, 1, 1, 1], null, job.tris * 3, 0.02, []);
+  const attr = new Float32Array(nv * 9);
+  for (let i = 0; i < nv; i++) attr.set([nor[i * 3], nor[i * 3 + 1], nor[i * 3 + 2], ao[i * 2], ao[i * 2 + 1], amat[i * 4], amat[i * 4 + 1], amat[i * 4 + 2], amat[i * 4 + 3]], i * 9);
+  const [lod, err] = MeshoptSimplifier.simplifyWithAttributes(idx, new Float32Array(pos), 3, attr, 9, [0.5, 0.5, 0.5, 0.8, 0.4, 1, 1, 1, 1], null, job.tris * 3, 0.02, []);
   log(name, 'simplified to', lod.length / 3, 'tris, error', err.toExponential(2));
   // compact the vertex buffer to the vertices still referenced
   const remap = new Int32Array(nv).fill(-1);
   let n = 0;
   for (const i of lod) if (remap[i] < 0) remap[i] = n++;
-  const P = new Float32Array(n * 3), Nn = new Float32Array(n * 3), MA = new Float32Array(n * 4), AO = new Float32Array(n);
+  const P = new Float32Array(n * 3), Nn = new Float32Array(n * 3), MA = new Float32Array(n * 4), AO = new Float32Array(n * 2);
   const J = new Uint16Array(n * 4), W = new Float32Array(n * 4);
   for (let i = 0; i < nv; i++) {
     const r = remap[i];
@@ -54,7 +59,7 @@ async function bake(name, job) {
     P.set(pos.subarray(i * 3, i * 3 + 3), r * 3);
     Nn.set(nor.subarray(i * 3, i * 3 + 3), r * 3);
     MA.set(amat.subarray(i * 4, i * 4 + 4), r * 4);
-    AO[r] = ao[i];
+    AO.set(ao.subarray(i * 2, i * 2 + 2), r * 2);
     if (si) {
       J.set(si.subarray(i * 4, i * 4 + 4), r * 4);
       W.set(sw.subarray(i * 4, i * 4 + 4), r * 4);
@@ -70,7 +75,7 @@ async function bake(name, job) {
     .setAttribute('POSITION', acc('p', P, 'VEC3'))
     .setAttribute('NORMAL', acc('n', Nn, 'VEC3'))
     .setAttribute('_AMAT', acc('m', MA, 'VEC4'))
-    .setAttribute('_AO', acc('ao', AO, 'SCALAR'))
+    .setAttribute('_AO', acc('ao', AO, 'VEC2'))
     .setIndices(acc('i', I, 'SCALAR'))
     .setMaterial(doc.createMaterial(name).setRoughnessFactor(0.6));
   const scene = doc.createScene(name);

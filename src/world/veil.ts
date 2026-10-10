@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MeshBasicNodeMaterial } from 'three/webgpu';
 import { texture, uv, vec2, vec3, float, sin, pow, abs, positionWorld, positionLocal, mix, color, smoothstep, attribute } from 'three/tsl';
-import { fbm2, floraGlow, glow, standard, worldTime, type N } from '../engine/materials';
+import { fbm2, floraGlow, glow, proceduralBump, standard, worldTime, type N } from '../engine/materials';
 import type { Palette } from '../story/strata';
 import type { Rng } from '../util/rng';
 import type { Terrain } from './terrain';
@@ -166,7 +166,12 @@ export class VeilSetPiece {
     const climb: N = sin(w.y.mul(0.45).sub(worldTime.mul(2.2)).add(grain.mul(6))).mul(0.5).add(0.5);
     const depth: N = attribute('aDepth', 'float');
     const vein = mix(color(pal.accent), color(pal.accent2), smoothstep(1, 4, depth));
-    bark.colorNode = vec3(bark.color.r, bark.color.g, bark.color.b).mul(grain.mul(0.6).add(0.6));
+    // fibrous bark: long vertical ridges over knotted grain, carved into the shading by procedural bump
+    const fibre: N = fbm2(vec2(w.x.add(w.z.mul(0.7)).mul(2.4), w.y.mul(0.18)));
+    const fine: N = fbm2(vec2(w.x.sub(w.z).mul(7), w.y.mul(1.1)));
+    const ridge: N = pow(abs(fibre.mul(2).sub(1)), float(0.6));
+    bark.normalNode = proceduralBump(ridge.mul(0.8).add(fine.mul(0.25)).add(grain.mul(0.5)), 0.09);
+    bark.colorNode = vec3(bark.color.r, bark.color.g, bark.color.b).mul(grain.mul(0.6).add(0.6)).mul(ridge.mul(0.7).add(0.55));
     bark.emissiveNode = vein.mul(veins.mul(climb.mul(2.6).add(0.4))).mul(floraGlow);
     const tree = new THREE.Mesh(treeGeo, bark);
     tree.castShadow = tree.receiveShadow = true;

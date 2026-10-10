@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { MeshBasicNodeMaterial, MeshStandardNodeMaterial, LineBasicNodeMaterial } from 'three/webgpu';
-import { glowBasic, standard, glowLine, type N } from '../engine/materials';
+import { glowBasic, glowLine, type N } from '../engine/materials';
 import { uniform } from 'three/tsl';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { Game } from '../game';
@@ -8,6 +8,7 @@ import { applyLook, heroUniforms, type HeroUniforms } from '../assets/heroModel'
 import { sculptMaterial } from '../assets/creatureMaterial';
 import { loadedModel } from '../assets/pipeline';
 import { FB, FIEND_CORE, buildFiendRig, fiendGeometry } from '../assets/fiendModel';
+import { miteGeometry, spitterGeometry } from '../assets/minorModels';
 import { CB, CONSTRUCT_CORE, buildConstructRig, constructGeometry, dataPylonGeometry, droneGeometry, ringGeometry } from '../assets/nullModels';
 import type { BossVariant, EnemyKind } from '../types';
 import { TAU, angleDiff, clamp, damp } from '../util/math';
@@ -169,29 +170,11 @@ export class Enemy {
     this.y = groundY + hover;
     this.group.add(this.body);
     this.edgeMat = glowLine({ color: HOT.clone().multiplyScalar(2.2) });
-    const solid = (emissive: number) =>
-      standard({ color: 0x14060c, emissive: HOT, emissiveIntensity: emissive, roughness: 0.4, metalness: 0.6, flatShading: true });
 
     if (kind === 'mite') {
-      this.coreMat = solid(0.8);
-      this.baseEmissive = 0.8;
-      const core = new THREE.Mesh(GEO.miteCore, glowBasic({ color: new THREE.Color(0xff9ab8).multiplyScalar(2.6) }));
-      this.extraMats.push(core.material as THREE.Material);
-      this.body.add(new THREE.Mesh(GEO.mite, this.coreMat), new THREE.LineSegments(GEO.miteEdges, this.edgeMat), core);
+      this.buildSwarm('mite');
     } else if (kind === 'spitter') {
-      this.coreMat = solid(0.6);
-      this.baseEmissive = 0.6;
-      const cone = new THREE.Mesh(GEO.spitter, this.coreMat);
-      cone.rotation.x = Math.PI;
-      const edges = new THREE.LineSegments(GEO.spitterEdges, this.edgeMat);
-      edges.rotation.x = Math.PI;
-      const ringMat = glowBasic({ color: new THREE.Color(0xff8a3b).multiplyScalar(2) });
-      this.extraMats.push(ringMat);
-      const ring = new THREE.Mesh(GEO.ring, ringMat);
-      ring.rotation.x = Math.PI / 2;
-      ring.position.y = 0.6;
-      this.spinners.push(ring);
-      this.body.add(cone, edges, ring);
+      this.buildSwarm('spitter');
     } else if (kind === 'drone') {
       this.buildDrone();
     } else if (kind === 'pylon') {
@@ -273,10 +256,38 @@ export class Enemy {
     return m;
   }
 
+  /** Null Sprite / Thorn Caster: rigid sculpts (assets/minorModels) with a pulsing glow heart. */
+  private buildSwarm(kind: 'mite' | 'spitter') {
+    const look = kind === 'mite'
+      ? { body: 0x3a2a3c, armor: 0x8a7a86, vein: 0xff3b7a, accent: 0x6a1c48, dark: 0x1c1018 }
+      : { body: 0x5a3446, armor: 0x7a3a4e, vein: 0xff8a3b, accent: 0xffb07a, dark: 0x22141a };
+    const mat = this.nullMaterial(look, kind === 'mite' ? 4 : 3, 0.6);
+    const name = kind === 'mite' ? 'nullSprite' : 'thornCaster';
+    const m = new THREE.Mesh(loadedModel(name)?.geometry ?? (kind === 'mite' ? miteGeometry() : spitterGeometry()), mat);
+    this.body.add(m);
+    const coreMat = glowBasic({ color: new THREE.Color(look.vein).multiplyScalar(2.6) });
+    this.coreMat = coreMat;
+    this.baseEmissive = 1;
+    const heart = new THREE.Mesh(GEO.miteCore, coreMat);
+    heart.scale.setScalar(kind === 'mite' ? 0.6 : 0.75);
+    heart.position.y = kind === 'mite' ? 0.02 : 0.36;
+    this.body.add(heart);
+    if (kind === 'spitter') {
+      const ringMat = glowBasic({ color: new THREE.Color(0xff8a3b).multiplyScalar(2) });
+      this.extraMats.push(ringMat);
+      const ring = new THREE.Mesh(GEO.ring, ringMat);
+      ring.rotation.x = Math.PI / 2;
+      ring.position.y = 0.62;
+      ring.scale.setScalar(0.55);
+      this.spinners.push(ring);
+      this.body.add(ring);
+    }
+  }
+
   /** Null-Sentry Drone: corroded-steel pod, red Null-optic, magnetic suspension rings, spike vanes. */
   private buildDrone() {
-    const mat = this.nullMaterial({ body: 0x343a44, armor: 0x6b3426, vein: 0xff2a44, accent: 0xff6a3b, dark: 0x15171c }, 3, 0.4);
-    const pod = new THREE.Mesh(droneGeometry(), mat);
+    const mat = this.nullMaterial({ body: 0x343a44, armor: 0x5a626e, vein: 0xff2a44, accent: 0xff6a3b, dark: 0x15171c }, 3, 0.4);
+    const pod = new THREE.Mesh(loadedModel('nullSentryDrone')?.geometry ?? droneGeometry(), mat);
     pod.castShadow = true;
     this.body.add(pod);
     const ringMat = glowBasic({ color: new THREE.Color(0xff2a44).multiplyScalar(2.4) });
@@ -299,7 +310,7 @@ export class Enemy {
   /** Integrated Data-River Pylon: a basalt obelisk feeding the Construct; destroying it breaches the armour. */
   private buildPylon() {
     const mat = this.nullMaterial({ body: 0x2a2436, armor: 0x4a2a6a, vein: 0x00e1ff, accent: 0x7af0ff, dark: 0x0d0b14 }, 1.4, 0.8);
-    const m = new THREE.Mesh(dataPylonGeometry(), mat);
+    const m = new THREE.Mesh(loadedModel('dataPylon')?.geometry ?? dataPylonGeometry(), mat);
     m.castShadow = true;
     this.body.add(m);
     const lensMat = glowBasic({ color: new THREE.Color(0x00e1ff).multiplyScalar(2.6) });
@@ -318,9 +329,9 @@ export class Enemy {
 
   /** The Void-Infused Construct (Act IV boss): one skinned colossus; armoured while its pylons stand. */
   private buildConstruct() {
-    const mat = this.nullMaterial({ body: 0x2c2238, armor: 0x5b2f9a, vein: 0xff2a7a, accent: 0xb084ff, dark: 0x110c18 }, 0.9, 0.7);
+    const mat = this.nullMaterial({ body: 0x2c2238, armor: 0x40345c, vein: 0xff2a7a, accent: 0xb084ff, dark: 0x16101e }, 0.9, 0.7);
     const rig = buildConstructRig();
-    const mesh = new THREE.SkinnedMesh(constructGeometry(), mat);
+    const mesh = new THREE.SkinnedMesh(loadedModel('voidConstruct')?.geometry ?? constructGeometry(), mat);
     mesh.add(rig.bones[CB.root]);
     mesh.bind(rig.skeleton);
     mesh.frustumCulled = false;
@@ -530,6 +541,8 @@ export function updateEnemy(e: Enemy, g: Game, dt: number) {
 const _inv = new THREE.Quaternion();
 const CORE_COLOR: Record<string, THREE.Color> = {
   brute: new THREE.Color(0xffa24a),
+  mite: new THREE.Color(0xff3b7a),
+  spitter: new THREE.Color(0xff8a3b),
   drone: new THREE.Color(0xff2a44),
   pylon: new THREE.Color(0x00e1ff),
   construct: new THREE.Color(0xff2a7a),

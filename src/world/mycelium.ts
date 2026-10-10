@@ -54,12 +54,12 @@ export class Mycelium {
     const reveal = smoothstep(0, 0.35, age);
     const flash = exp(age.mul(-2.2)).mul(0.6);
     const pulse = sin(this.u.time.mul(2.4).sub(positionLocal.x.add(positionLocal.z).mul(0.35)).add(kind.mul(5))).mul(0.5).add(0.5);
-    const c = mix(this.u.a, this.u.b, kind).mul(pulse.mul(pulse).mul(0.6).add(0.26).add(flash));
+    const c = mix(this.u.a, this.u.b, kind).mul(pulse.mul(pulse).mul(0.45).add(0.14).add(flash));
     const mat = new LineBasicNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
     mat.colorNode = c.mul(reveal);
     mat.opacityNode = reveal;
     mat.maskNode = age.greaterThanEqual(0);
-    glow(mat, floraGlow.mul(0.9));
+    glow(mat, floraGlow.mul(0.6));
     this.lines = new THREE.LineSegments(this.geo, mat);
     this.lines.frustumCulled = false;
     this.lines.renderOrder = 2;

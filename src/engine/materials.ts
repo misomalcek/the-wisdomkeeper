@@ -4,6 +4,7 @@ import { MeshStandardNodeMaterial, MeshBasicNodeMaterial, LineBasicNodeMaterial,
 import {
   Fn, uniform, float, vec2, vec3, vec4, color, mix, sin, fract, floor, dot, pow, max, smoothstep, abs, clamp,
   positionWorld, normalWorld, cameraPosition, diffuseColor, output, mrt, uv, exp, positionView, emissive,
+  normalView, faceDirection,
 } from 'three/tsl';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -219,3 +220,22 @@ export function glowBasic(params: THREE.MeshBasicMaterialParameters = {}, k: num
 export function glowLine(params: THREE.LineBasicMaterialParameters = {}, k = 1) {
   return glow(new LineBasicNodeMaterial(params), k);
 }
+
+/**
+ * Procedural bump mapping for surfaces without UVs (Mikkelsen, "Bump Mapping Unparametrized Surfaces"):
+ * the screen-space derivatives of any scalar height field perturb the view-space normal. Assign the result
+ * to a lit material's `normalNode`.
+ */
+export const proceduralBump = (height: N, scale: number | N): N => {
+  const h: N = float(height).mul(scale);
+  const dHdx: N = h.dFdx();
+  const dHdy: N = h.dFdy();
+  const sx: N = positionView.dFdx();
+  const sy: N = positionView.dFdy();
+  const n: N = normalView;
+  const r1: N = sy.cross(n);
+  const r2: N = n.cross(sx);
+  const det: N = sx.dot(r1).mul(faceDirection);
+  const grad: N = det.sign().mul(dHdx.mul(r1).add(dHdy.mul(r2)));
+  return det.abs().mul(n).sub(grad).normalize();
+};

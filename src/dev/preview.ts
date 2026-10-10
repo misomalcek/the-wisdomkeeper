@@ -111,10 +111,10 @@ if (qs.has('null')) {
 if (qs.has('enemy')) {
   const { Enemy } = await import('../entities/enemies');
   heroes.forEach(({ h }) => (h.root.visible = false));
-  const kind = qs.get('enemy') as 'brute' | 'drone' | 'pylon' | 'boss';
+  const kind = qs.get('enemy') as 'brute' | 'drone' | 'pylon' | 'boss' | 'mite' | 'spitter';
   const e = new Enemy(kind, 0, 0, 1, 0, 'construct');
   e.group.scale.setScalar(1);
-  e.group.position.set(0, kind === 'brute' ? 1.9 : kind === 'drone' ? 1.6 : kind === 'boss' ? 4.8 : 0, 0);
+  e.group.position.set(0, kind === 'brute' ? 1.9 : kind === 'drone' || kind === 'mite' ? 1.6 : kind === 'spitter' ? 2.2 : kind === 'boss' ? 4.8 : 0, 0);
   e.group.rotation.y = Number(qs.get('yaw') ?? 0);
   scene.add(e.group);
   const d = Number(qs.get('d') ?? 6), y = Number(qs.get('y') ?? 1.8);

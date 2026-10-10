@@ -52,8 +52,9 @@ const _c = { f1: 0, f2: 0 };
  */
 export const fiendDetail: DetailFn = (x, y, z, mat) => {
   if (mat === MAT.skin) {
-    const s = ridged(x * 15, y * 3.2, z * 15, 3);
-    return s * 0.007 + fbm(x * 48, y * 48, z * 48, 2) * 0.0025;
+    // fine parallel fibres (limbs run along Y in the bind pose) over a soft pore grain
+    const f = ridged(x * 34, y * 3.5, z * 34, 2);
+    return f * f * 0.006 + fbm(x * 70, y * 70, z * 70, 2) * 0.0015 + fbm(x * 6, y * 6, z * 6, 2) * 0.006;
   }
   if (mat === MAT.armor) {
     cellular(x * 7.5, y * 1.8, z * 7.5, _c);
@@ -151,12 +152,12 @@ export function fiendGeometry(q: SculptQuality = {}): THREE.BufferGeometry {
   ell(FB.torso, [0, 1.5, 0.62], [0.3, 0.33, 0.28], 0.07, S, true);
   for (let i = 0; i < 4; i++) {
     const y = 1.26 + i * 0.15;
-    const rx = 0.6 - Math.abs(i - 1.5) * 0.04, rz = 0.5;
+    const rx = 0.58 - Math.abs(i - 1.5) * 0.04, rz = 0.4;
     for (const s of [-1, 1]) {
       const pts: number[][] = [];
       for (let k = 0; k <= 4; k++) {
         const th = 0.12 + (k / 4) * 1.15;
-        pts.push([s * rx * Math.sin(th), y - k * 0.025, 0.12 + rz * Math.cos(th)]);
+        pts.push([s * rx * Math.sin(th), y - 0.05 + k * 0.02, 0.14 + rz * Math.cos(th)]);
       }
       cord(FB.torso, pts, 0.04, 0.026, 0.03, D, 8);
     }
@@ -166,11 +167,17 @@ export function fiendGeometry(q: SculptQuality = {}): THREE.BufferGeometry {
   for (const s of [-1, 1]) {
     for (let i = 0; i < 3; i++) box(FB.torso, [s * (0.72 + i * 0.05), 2.12 - i * 0.12, 0.02 - i * 0.04], [0.26 - i * 0.03, 0.05, 0.3 - i * 0.03], 0.035, 0.04, A, [0.1, 0, s * (0.42 + i * 0.12)]);
   }
-  // spine ridge: plates marching down the hump
-  for (let i = 0; i < 7; i++) {
-    const t = i / 6;
-    const y = 2.42 - t * 1.25, z = -0.6 - Math.sin(t * Math.PI) * 0.32;
-    box(FB.torso, [0, y, z], [0.18 - t * 0.06, 0.06, 0.12], 0.03, 0.05, A, [-0.9 + t * 1.3, 0, 0]);
+  // spine ridge: overlapping bark scales down the hump, flanked by knotted burls and climbing roots
+  for (let i = 0; i < 9; i++) {
+    const t = i / 8;
+    const y = 2.42 - t * 1.3, z = -0.56 - Math.sin(t * Math.PI) * 0.34;
+    ell(FB.torso, [0, y, z], [0.2 - t * 0.07, 0.11, 0.06], 0.04, A, false, [-1.0 + t * 1.5, 0, 0]);
+  }
+  const burls = [[-0.38, 2.1, -0.66, 0.12], [0.42, 1.95, -0.66, 0.1], [-0.3, 1.55, -0.74, 0.09], [0.28, 1.7, -0.78, 0.11], [0.0, 2.36, -0.5, 0.1], [-0.5, 1.8, -0.5, 0.08], [0.55, 2.2, -0.42, 0.08]];
+  for (const [x, y, z, r] of burls) ell(FB.torso, [x, y, z], [r, r * 0.8, r * 0.7], 0.06, D);
+  for (const s of [-1, 1]) {
+    cord(FB.torso, [[s * 0.1, 2.45, -0.4], [s * 0.4, 2.25, -0.68], [s * 0.6, 1.9, -0.62], [s * 0.66, 1.5, -0.42]], 0.05, 0.03, 0.025, A, 10);
+    cord(FB.torso, [[s * 0.2, 2.3, -0.6], [s * 0.25, 1.8, -0.86], [s * 0.42, 1.35, -0.66]], 0.04, 0.025, 0.025, A, 8);
   }
   // void crystals erupting from the hump
   const crystals = [[-0.32, 2.2, -0.62, -0.5, 0.8, -0.5, 0.55], [0.36, 2.15, -0.66, 0.5, 0.7, -0.55, 0.5], [-0.12, 2.35, -0.55, -0.15, 1, -0.3, 0.7], [0.16, 2.3, -0.7, 0.2, 0.85, -0.6, 0.62], [-0.48, 1.9, -0.6, -0.8, 0.4, -0.5, 0.42], [0.5, 1.85, -0.62, 0.8, 0.35, -0.55, 0.45], [0, 2.05, -0.86, 0, 0.5, -0.9, 0.48]];

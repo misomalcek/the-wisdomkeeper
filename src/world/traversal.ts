@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { MeshBasicNodeMaterial } from 'three/webgpu';
-import { glowBasic, standard } from '../engine/materials';
-import { diffuseColor, normalWorld, clamp } from 'three/tsl';
+import { fbm2, floraGlow, glowBasic, proceduralBump, standard, type N } from '../engine/materials';
+import { diffuseColor, normalWorld, clamp, positionLocal, atan, pow, abs, sin, float, smoothstep, vec3 } from 'three/tsl';
 import type { Rng } from '../util/rng';
 import type { Palette } from '../story/strata';
 import type { Terrain } from './terrain';
@@ -104,7 +104,18 @@ export class MushroomGroves {
     const rimGeo = new THREE.TorusGeometry(1, 0.035, 6, 48).rotateX(Math.PI / 2);
     const capMat = standard({ roughness: 0.62, metalness: 0.05 });
     // soft bioluminescent underside: brighter where the surface faces down
-    capMat.emissiveNode = diffuseColor.rgb.mul(clamp(normalWorld.y.negate(), 0, 1).mul(0.9).add(0.12));
+    // veined, spotted cap skin: radial veins and soft spots, carved by procedural bump and glowing faintly
+    const lp: N = positionLocal;
+    const ang: N = atan(lp.z, lp.x);
+    const rad: N = lp.xz.length();
+    const veinsN: N = pow(abs(sin(ang.mul(13).add(fbm2(lp.xz.mul(3)).mul(5)))), float(10)).mul(smoothstep(0.15, 0.9, rad));
+    const spots: N = smoothstep(0.62, 0.78, fbm2(lp.xz.mul(5.5)));
+    capMat.normalNode = proceduralBump(veinsN.mul(0.5).add(spots.mul(0.7)).add(fbm2(lp.xz.mul(18)).mul(0.15)), 0.15);
+    // instance colour multiplies this (NodeMaterial applies instanceColor on top of colorNode)
+    capMat.colorNode = vec3(1, 1, 1).mul(float(1).sub(spots.mul(0.35))).mul(float(0.85).add(veinsN.mul(0.3)));
+    capMat.emissiveNode = diffuseColor.rgb
+      .mul(clamp(normalWorld.y.negate(), 0, 1).mul(0.9).add(0.1))
+      .add(diffuseColor.rgb.mul(veinsN.mul(0.55).mul(floraGlow)));
     occlusionFade(capMat);
     const stalkMat = occlusionFade(standard({ color: 0xffffff, roughness: 0.8 }));
     this.rimMat = glowBasic({ color: 0xffffff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });

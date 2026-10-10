@@ -10,7 +10,11 @@
       "variants": ["resonant", "verdant", "void"]
     },
     "voidRootFiend": { "glb": "models/void-root-fiend.glb", "fallback": "sdf", "sockets": ["weak_point_core"] },
-    "nullSentryDrone": { "glb": null, "fallback": "sdf", "sockets": ["eye_lens"] },
+    "nullSentryDrone": { "glb": "models/null-sentry-drone.glb", "fallback": "sdf", "sockets": ["eye_lens"] },
+    "voidConstruct": { "glb": "models/void-construct.glb", "fallback": "sdf", "sockets": ["resonance_core", "conduit_l", "conduit_r"] },
+    "nullSprite": { "glb": "models/null-sprite.glb", "fallback": "sdf", "sockets": ["heart"] },
+    "thornCaster": { "glb": "models/thorn-caster.glb", "fallback": "sdf", "sockets": ["maw"] },
+    "dataPylon": { "glb": "models/data-pylon.glb", "fallback": "sdf", "sockets": ["conduit_lens"] },
     "rootBlade": { "glb": null, "fallback": "procedural", "sockets": ["grip"] }
   }
 }

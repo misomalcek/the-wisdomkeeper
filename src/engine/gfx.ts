@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RenderPipeline, WebGPURenderer, PMREMGenerator } from 'three/webgpu';
-import { pass, mrt, output, normalView, uniform, vec4, mix, float, screenUV, smoothstep, length, vec2, renderOutput } from 'three/tsl';
-import { bloomEmissive, fogDensity, type N } from './materials';
+import { pass, mrt, output, normalView, uniform, vec3, vec4, mix, float, screenUV, smoothstep, length, vec2, renderOutput, dot, step, getViewPosition, exp, max } from 'three/tsl';
+import { bloomEmissive, fbm2, fogDensity, hash21, worldTime, type N } from './materials';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { fxaa } from 'three/addons/tsl/display/FXAANode.js';
@@ -31,12 +31,30 @@ export class Gfx {
   private pipeline!: RenderPipeline;
   private aoStrength = uniform(0.85);
   private vignette = uniform(0.35);
+  /** Light shafts: the sun's screen position, its visibility (0 behind the camera) and colour. */
+  private sunUV = uniform(new THREE.Vector2(0.5, -0.2));
+  private sunVis = uniform(0);
+  readonly shaftColor = uniform(new THREE.Color(0.55, 0.85, 1.0));
+  readonly shaftStrength = uniform(0.22);
+  /** Grade: global saturation, highlight desaturation (neon cores burn toward white) and shadow tint. */
+  readonly saturation = uniform(0.95);
+  /** Ground mist: drifting low fog pooled in the hollows (world height base, density, colour). */
+  readonly mistBase = uniform(0);
+  readonly mistStrength = uniform(0.32);
+  readonly mistColor = uniform(new THREE.Color(0.18, 0.42, 0.48));
+  private projInv = uniform(new THREE.Matrix4());
+  private camWorld = uniform(new THREE.Matrix4());
+  readonly shadowTint = uniform(new THREE.Color(0.002, 0.006, 0.009));
+  /** Contrast around mid-grey (linear 0.18): >1 deepens shadows and lifts highlights. */
+  readonly contrast = uniform(1.15);
   private pixelRatio: number;
   private lowQualityTimer = 0;
   private frames = 0;
   private fpsAcc = 0;
   fps = 60;
   bloomEnabled = true;
+  /** Screen-space light shafts (high quality and up; `?noshafts` disables). */
+  shafts = !new URLSearchParams(location.search).has('noshafts');
   private adaptive = true;
   quality: Quality;
   readonly backend: 'webgpu' | 'webgl2';
@@ -113,8 +131,50 @@ export class Gfx {
       const occl = aoPass.getTextureNode().sample(screenUV).r;
       lit = vec4(color.rgb.mul(mix(float(1), occl, this.aoStrength)), color.a);
     }
+    {
+      // ground mist from the depth buffer: reconstruct each pixel's world position; fog thickens with
+      // distance and pools below a few metres above the ground, drifting with low-frequency noise
+      const depth = scenePass.getTextureNode('depth');
+      const d: N = depth.sample(screenUV).r;
+      const vp: N = getViewPosition(screenUV, d, this.projInv);
+      const wp: N = this.camWorld.mul(vec4(vp, 1)).xyz;
+      const dist: N = vp.length();
+      const drift: N = fbm2(wp.xz.mul(0.035).add(vec2(worldTime.mul(0.02), worldTime.mul(-0.013))));
+      const height: N = exp(max(wp.y.sub(this.mistBase), 0).mul(-0.45));
+      const along: N = float(1).sub(exp(dist.mul(-0.012)));
+      const mist: N = along.mul(height).mul(drift.mul(0.9).add(0.35)).mul(this.mistStrength).mul(step(d, 0.99999)).min(0.85);
+      lit = vec4(mix(lit.rgb, this.mistColor, mist), lit.a);
+    }
+    if (Q.ao && this.shafts) {
+      // crepuscular light shafts: march from each pixel toward the sun, gathering open sky (depth at the far
+      // plane) through gaps in the canopy, with exponential decay — volumetric light through the fog
+      const depth = scenePass.getTextureNode('depth');
+      const N_RAY = 16;
+      const step0: N = this.sunUV.sub(screenUV).mul(0.85 / N_RAY);
+      let shafts: N = float(0);
+      let w = 1;
+      // per-pixel jitter of the march start hides the banding of so few taps
+      const jit: N = hash21(screenUV.mul(1731.0));
+      for (let i = 1; i <= N_RAY; i++) {
+        shafts = shafts.add(step(0.99999, depth.sample(screenUV.add(step0.mul(jit.add(i)))).r).mul(w));
+        w *= 0.88;
+      }
+      shafts = shafts.mul((1 - 0.88) / (1 - Math.pow(0.88, N_RAY)));
+      const ray: N = shafts.mul(this.shaftStrength).mul(this.sunVis);
+      lit = vec4(lit.rgb.add(this.shaftColor.mul(ray)), lit.a);
+    }
     this.bloom = bloom(scenePass.getTextureNode('emissive'), 1.4, 0.5, 0.2);
     let out: N = this.bloomEnabled ? lit.add(this.bloom) : lit;
+    // grade in linear light: neon highlights desaturate toward white, a global saturation trim, cool shadows
+    {
+      const c: N = out.rgb;
+      const lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
+      const hi = smoothstep(1.0, 5.0, lum);
+      const g1 = mix(vec3(lum), c, float(1).sub(hi.mul(0.5)).mul(this.saturation));
+      const g15 = g1.div(0.18).max(vec3(0)).pow(vec3(this.contrast)).mul(0.18);
+      const g2 = g15.add(this.shadowTint.mul(float(1).sub(smoothstep(0.0, 0.2, lum))));
+      out = vec4(g2, 1);
+    }
     // tone map + sRGB inside the graph so FXAA works on display values
     out = renderOutput(out);
     if (Q.aa) out = fxaa(out);
@@ -193,6 +253,8 @@ export class Gfx {
 
   /** Keep the sun's shadow frustum centred on the hero. */
   followShadow(x: number, y: number, z: number) {
+    // the mist pools a little below the hero; ease it so jumps and flight don't pump the fog
+    this.mistBase.value += (y - 1.2 - this.mistBase.value) * 0.02;
     const dir = this.sunDir;
     this.sun.target.position.set(x, y, z);
     this.sun.position.set(x + dir.x * 120, y + dir.y * 120, z + dir.z * 120);
@@ -202,6 +264,8 @@ export class Gfx {
 
   setWorldLook(p: { fog: number; fogDensity: number; hemiSky: number; hemiGround: number; sun: number; accent: number }) {
     const fog = new THREE.Color(p.fog);
+    // mist takes the region's fog hue, lifted, so it reads as lit vapour rather than a grey wash
+    this.mistColor.value.copy(fog).lerp(new THREE.Color(p.accent), 0.12).multiplyScalar(1.6);
     this.scene.background = fog;
     if (this.scene.fog instanceof THREE.FogExp2) {
       this.scene.fog.color.copy(fog);
@@ -224,7 +288,17 @@ export class Gfx {
     this.scene.environmentIntensity = intensity;
   }
 
+  private _sp = new THREE.Vector3();
+  private _fw = new THREE.Vector3();
   render() {
+    // project the sun for the light shafts; fade them out as it leaves the view
+    const cam = this.camera;
+    this._sp.copy(cam.position).addScaledVector(this.sunDir, 1000).project(cam);
+    this.sunUV.value.set(this._sp.x * 0.5 + 0.5, 0.5 - this._sp.y * 0.5);
+    cam.getWorldDirection(this._fw);
+    this.sunVis.value = THREE.MathUtils.smoothstep(this._fw.dot(this.sunDir), -0.1, 0.45);
+    this.projInv.value.copy(cam.projectionMatrixInverse);
+    this.camWorld.value.copy(cam.matrixWorld);
     this.pipeline.render();
   }
 }

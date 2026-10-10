@@ -252,8 +252,8 @@ export function heroTexturedMaterial(u: HeroUniforms, t: HeroTextures) {
   const lit: N = base.g.min(base.b).sub(base.r);
   const mask = smoothstep(0.18, 0.42, lit).mul(smoothstep(0.35, 0.75, base.g.max(base.b)));
   const pulse = sin(u.uT.mul(1.5 * 6.283).sub(positionGeometry.y.mul(9))).mul(0.5).add(0.5);
-  m.emissiveNode = u.cGlow.mul(mask.mul(pulse.mul(1.4).add(0.7)))
-    .add(u.cGlow.mul(fresnel(3).mul(0.22)))
+  m.emissiveNode = u.cGlow.mul(mask.mul(pulse.mul(0.9).add(0.45)))
+    .add(u.cGlow.mul(fresnel(3).mul(0.12)))
     .add(vec3(1, 0.25, 0.35).mul(u.uHurt));
   return m;
 }
