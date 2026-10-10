@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
-import { attribute, clamp, float, materialEmissive, positionGeometry, sin, smoothstep, uniform, vec3 } from 'three/tsl';
+import { attribute, clamp, float, hue, materialEmissive, positionGeometry, sin, smoothstep, texture, uniform, vec3 } from 'three/tsl';
 import { Sculpt, skinnedTube, matWeights, MAT, type Prim, type MatId } from './sdf';
 import { fresnel, type N } from '../engine/materials';
 
@@ -63,20 +63,24 @@ export interface HeroRig {
   skeleton: THREE.Skeleton;
 }
 
-export function buildRig(): HeroRig {
+/** Build the pose rig; `layout` (from a GLB skeleton) overrides the procedural bind offsets bone by bone. */
+export function buildRig(layout?: Record<string, [number, number, number]>): HeroRig {
   const bones: THREE.Bone[] = [];
   for (const [i, parent, p] of LAYOUT) {
     const b = new THREE.Bone();
     b.name = Object.keys(BONE).find((k) => BONE[k as keyof typeof BONE] === i)!;
-    b.position.set(...p);
+    b.position.set(...(layout?.[b.name] ?? p));
     bones[i] = b;
     if (parent >= 0) bones[parent].add(b);
   }
   // crest: per strand a chain of CREST_SEGS bones pivoting at t = k / CREST_SEGS along its curve
+  bones[0].updateMatrixWorld(true);
+  const head = bones[BONE.head].getWorldPosition(new THREE.Vector3());
+  const lift = new THREE.Vector3(head.x, head.y - 1.8, head.z);
   for (let s = 0; s < CREST_STRANDS; s++) {
-    const curve = new THREE.CatmullRomCurve3(crestCurve(s));
+    const curve = new THREE.CatmullRomCurve3(crestCurve(s).map((v) => v.add(lift)));
     let parent = bones[BONE.head];
-    let prev = new THREE.Vector3(0, 1.8, 0);
+    let prev = head.clone();
     for (let k = 0; k < CREST_SEGS; k++) {
       const b = new THREE.Bone();
       b.name = `crest${s}_${k}`;
@@ -194,16 +198,18 @@ export interface HeroLook {
   vein: number;
   accent: number;
   dark: number;
+  /** Hue rotation (radians) applied to a textured GLB so suit variants recolour the painted model. */
+  hue?: number;
 }
 
 export interface HeroUniforms {
-  cSkin: N; cArmor: N; cGlow: N; cDark: N; cBlade: N; uT: N; uHurt: N;
+  cSkin: N; cArmor: N; cGlow: N; cDark: N; cBlade: N; uT: N; uHurt: N; uHue: N;
 }
 
 export function heroUniforms(): HeroUniforms {
   return {
     cSkin: uniform(new THREE.Color()), cArmor: uniform(new THREE.Color()), cGlow: uniform(new THREE.Color()),
-    cDark: uniform(new THREE.Color()), cBlade: uniform(new THREE.Color()), uT: uniform(0), uHurt: uniform(0),
+    cDark: uniform(new THREE.Color()), cBlade: uniform(new THREE.Color()), uT: uniform(0), uHurt: uniform(0), uHue: uniform(0),
   };
 }
 
@@ -213,6 +219,43 @@ export function applyLook(u: HeroUniforms, l: HeroLook) {
   u.cGlow.value.set(l.vein);
   u.cDark.value.set(l.dark);
   u.cBlade.value.set(l.accent);
+  u.uHue.value = l.hue ?? 0;
+}
+
+export interface HeroTextures {
+  map: THREE.Texture | null;
+  orm?: THREE.Texture | null;
+  normal?: THREE.Texture | null;
+}
+
+/**
+ * PBR material for a painted GLB hero (and its spear): base colour hue-rotated per suit, glTF ORM packed
+ * roughness/metalness/occlusion, tangent normals, and the bioluminescence lifted out of the paint itself:
+ * texels that read as cyan light (green+blue well above red) pulse upward in the suit's vein colour.
+ */
+export function heroTexturedMaterial(u: HeroUniforms, t: HeroTextures) {
+  const m = new MeshStandardNodeMaterial();
+  if (t.normal) {
+    m.normalMap = t.normal;
+    m.normalScale.set(1, 1);
+  }
+  if (t.orm) {
+    m.roughnessMap = t.orm;
+    m.metalnessMap = t.orm;
+    m.aoMap = t.orm;
+    m.aoMapIntensity = 0.85;
+  }
+  m.roughness = 1;
+  m.metalness = 1;
+  const base: N = t.map ? texture(t.map).rgb : u.cSkin;
+  m.colorNode = hue(base, u.uHue);
+  const lit: N = base.g.min(base.b).sub(base.r);
+  const mask = smoothstep(0.18, 0.42, lit).mul(smoothstep(0.35, 0.75, base.g.max(base.b)));
+  const pulse = sin(u.uT.mul(1.5 * 6.283).sub(positionGeometry.y.mul(9))).mul(0.5).add(0.5);
+  m.emissiveNode = u.cGlow.mul(mask.mul(pulse.mul(1.4).add(0.7)))
+    .add(u.cGlow.mul(fresnel(3).mul(0.22)))
+    .add(vec3(1, 0.25, 0.35).mul(u.uHurt));
+  return m;
 }
 
 /**

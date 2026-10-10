@@ -4,7 +4,9 @@ import { glowBasic, standard, glowLine, type N } from '../engine/materials';
 import { uniform } from 'three/tsl';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { Game } from '../game';
-import { applyLook, heroMaterial, heroUniforms, type HeroUniforms } from '../assets/heroModel';
+import { applyLook, heroUniforms, type HeroUniforms } from '../assets/heroModel';
+import { sculptMaterial } from '../assets/creatureMaterial';
+import { loadedModel } from '../assets/pipeline';
 import { FB, FIEND_CORE, buildFiendRig, fiendGeometry } from '../assets/fiendModel';
 import { CB, CONSTRUCT_CORE, buildConstructRig, constructGeometry, dataPylonGeometry, droneGeometry, ringGeometry } from '../assets/nullModels';
 import type { BossVariant, EnemyKind } from '../types';
@@ -263,17 +265,17 @@ export class Enemy {
     this.beam.scale.set(width, width, len / Math.max(this.group.scale.x, 0.01));
   }
 
-  private nullMaterial(look: { body: number; armor: number; vein: number; accent: number; dark: number }, veinScale: number, veinGain: number) {
+  private nullMaterial(look: { body: number; armor: number; vein: number; accent: number; dark: number }, mottle: number, crackGlow: number) {
     const u: HeroUniforms = { ...heroUniforms(), uT: this.uT, uHurt: this.uHurt };
     applyLook(u, look);
-    const m = heroMaterial(u, veinScale, veinGain);
+    const m = sculptMaterial(u, { mottle, crackGlow });
     this.extraMats.push(m);
     return m;
   }
 
   /** Null-Sentry Drone: corroded-steel pod, red Null-optic, magnetic suspension rings, spike vanes. */
   private buildDrone() {
-    const mat = this.nullMaterial({ body: 0x343a44, armor: 0x6b3426, vein: 0xff2a44, accent: 0xff6a3b, dark: 0x15171c }, 1.4, 0.6);
+    const mat = this.nullMaterial({ body: 0x343a44, armor: 0x6b3426, vein: 0xff2a44, accent: 0xff6a3b, dark: 0x15171c }, 3, 0.4);
     const pod = new THREE.Mesh(droneGeometry(), mat);
     pod.castShadow = true;
     this.body.add(pod);
@@ -296,7 +298,7 @@ export class Enemy {
 
   /** Integrated Data-River Pylon: a basalt obelisk feeding the Construct; destroying it breaches the armour. */
   private buildPylon() {
-    const mat = this.nullMaterial({ body: 0x2a2436, armor: 0x4a2a6a, vein: 0x00e1ff, accent: 0x7af0ff, dark: 0x0d0b14 }, 0.6, 0.8);
+    const mat = this.nullMaterial({ body: 0x2a2436, armor: 0x4a2a6a, vein: 0x00e1ff, accent: 0x7af0ff, dark: 0x0d0b14 }, 1.4, 0.8);
     const m = new THREE.Mesh(dataPylonGeometry(), mat);
     m.castShadow = true;
     this.body.add(m);
@@ -316,7 +318,7 @@ export class Enemy {
 
   /** The Void-Infused Construct (Act IV boss): one skinned colossus; armoured while its pylons stand. */
   private buildConstruct() {
-    const mat = this.nullMaterial({ body: 0x2c2238, armor: 0x5b2f9a, vein: 0xff2a7a, accent: 0xb084ff, dark: 0x110c18 }, 0.35, 0.7);
+    const mat = this.nullMaterial({ body: 0x2c2238, armor: 0x5b2f9a, vein: 0xff2a7a, accent: 0xb084ff, dark: 0x110c18 }, 0.9, 0.7);
     const rig = buildConstructRig();
     const mesh = new THREE.SkinnedMesh(constructGeometry(), mat);
     mesh.add(rig.bones[CB.root]);
@@ -348,13 +350,14 @@ export class Enemy {
   /** Void-Root Fiend: one sculpted skinned mesh (assets/fiendModel); its glowing mycelial core is the weak point. */
   private buildFiend() {
     const u: HeroUniforms = { ...heroUniforms(), uT: this.uT, uHurt: this.uHurt };
-    applyLook(u, { body: 0x3e3052, armor: 0x140c1c, vein: 0x7cff6b, accent: 0x8cff9a, dark: 0x251a36 });
-    const mat = heroMaterial(u, 0.5, 0.45);
+    applyLook(u, { body: 0x7a4f5c, armor: 0x54443c, vein: 0x7cff6b, accent: 0x9a6bff, dark: 0x3a2e34 });
+    const mat = sculptMaterial(u, { mottle: 1.6, crackGlow: 0.7 });
     this.extraMats.push(mat);
     const coreMat = glowBasic({ color: new THREE.Color(0xffa24a).multiplyScalar(2.6) });
     this.extraMats.push(coreMat);
     const rig = buildFiendRig();
-    const mesh = new THREE.SkinnedMesh(fiendGeometry(), mat);
+    const mesh = new THREE.SkinnedMesh(loadedModel('voidRootFiend')?.geometry ?? fiendGeometry(), mat);
+    mesh.castShadow = true;
     mesh.add(rig.bones[FB.root]);
     mesh.bind(rig.skeleton);
     mesh.frustumCulled = false;

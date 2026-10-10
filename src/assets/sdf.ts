@@ -24,8 +24,9 @@ export function matWeights(id: number, out: Float32Array, o: number, armor = 1) 
 
 export interface Prim {
   bone: number;
-  /** Round cone from a (radius ra) to b (radius rb), in the bone's bind space. */
-  kind: 'cone' | 'ellipsoid';
+  /** Round cone from a (radius ra) to b (radius rb), in the bone's bind space; ellipsoid; or rounded box
+   * centred on a with half extents `radii`, corner radius `ra` and rotation `rot`. */
+  kind: 'cone' | 'ellipsoid' | 'box';
   a: THREE.Vector3;
   b?: THREE.Vector3;
   ra: number;
@@ -41,7 +42,7 @@ export interface Prim {
 }
 
 interface Baked {
-  kind: 0 | 1;
+  kind: 0 | 1 | 2;
   bone: number;
   k: number;
   mat: number;
@@ -93,6 +94,17 @@ function sdEllipsoid(px: number, py: number, pz: number, p: Baked) {
   return k1 > 1e-9 ? (k0 * (k0 - 1)) / k1 : -Math.min(p.rx, p.ry, p.rz);
 }
 
+/** Rounded box: half extents rx/ry/rz (already shrunk by the rounding radius ra) in the primitive frame. */
+function sdRoundBox(px: number, py: number, pz: number, p: Baked) {
+  const dx = px - p.ax, dy = py - p.ay, dz = pz - p.az;
+  const m = p.m;
+  const qx = Math.abs(m[0] * dx + m[1] * dy + m[2] * dz) - p.rx;
+  const qy = Math.abs(m[3] * dx + m[4] * dy + m[5] * dz) - p.ry;
+  const qz = Math.abs(m[6] * dx + m[7] * dy + m[8] * dz) - p.rz;
+  const ox = Math.max(qx, 0), oy = Math.max(qy, 0), oz = Math.max(qz, 0);
+  return Math.sqrt(ox * ox + oy * oy + oz * oz) + Math.min(Math.max(qx, qy, qz), 0) - p.ra;
+}
+
 const smin = (a: number, b: number, k: number) => {
   if (k <= 0) return Math.min(a, b);
   const h = Math.max(k - Math.abs(a - b), 0) / k;
@@ -106,14 +118,31 @@ export interface SculptResult {
   vertices: number;
 }
 
+/**
+ * Surface detail: displacement (metres, positive carves inward) for a point near the surface, given the
+ * material of the nearest primitive. Evaluated only inside a thin band around the zero set.
+ */
+export type DetailFn = (x: number, y: number, z: number, mat: number) => number;
+export interface SculptOptions {
+  detail?: DetailFn;
+  /** Half-width of the band where detail applies (default 0.06 m). */
+  band?: number;
+}
+
+const EMPTY: Baked[] = [];
+
 export class Sculpt {
   private prims: Baked[] = [];
+  private detail: DetailFn | null;
+  private band: number;
 
   /**
    * Bake primitives into model space. With `bones`, each primitive is given in its bone's bind space;
    * without, primitives are already in model space and `bone` only selects skinning.
    */
-  constructor(prims: Prim[], bones?: THREE.Object3D[]) {
+  constructor(prims: Prim[], bones?: THREE.Object3D[], opts: SculptOptions = {}) {
+    this.detail = opts.detail ?? null;
+    this.band = opts.band ?? 0.06;
     const ident = new THREE.Matrix4();
     const q = new THREE.Quaternion();
     const s = new THREE.Vector3();
@@ -122,7 +151,7 @@ export class Sculpt {
       const mw = bones ? bones[p.bone].matrixWorld : ident;
       mw.decompose(pos, q, s);
       const b: Baked = {
-        kind: p.kind === 'cone' ? 0 : 1, bone: p.bone, k: p.k, mat: p.mat, sub: !!p.sub,
+        kind: p.kind === 'cone' ? 0 : p.kind === 'ellipsoid' ? 1 : 2, bone: p.bone, k: p.k, mat: p.mat, sub: !!p.sub,
         ax: 0, ay: 0, az: 0, bx: 0, by: 0, bz: 0, ra: p.ra, rb: p.rb ?? p.ra, m: [], rx: 0, ry: 0, rz: 0,
         min: new THREE.Vector3(), max: new THREE.Vector3(),
       };
@@ -142,7 +171,10 @@ export class Sculpt {
         // Matrix4 is column-major; row-major 3x3 of the inverse rotation
         b.m = [inv[0], inv[4], inv[8], inv[1], inv[5], inv[9], inv[2], inv[6], inv[10]];
         b.rx = p.radii!.x; b.ry = p.radii!.y; b.rz = p.radii!.z;
-        const r = Math.max(b.rx, b.ry, b.rz) + pad;
+        if (p.kind === 'box') {
+          b.rx -= p.ra; b.ry -= p.ra; b.rz -= p.ra;
+        }
+        const r = (p.kind === 'box' ? Math.hypot(p.radii!.x, p.radii!.y, p.radii!.z) : Math.max(b.rx, b.ry, b.rz)) + pad;
         b.min.set(_v.x - r, _v.y - r, _v.z - r);
         b.max.set(_v.x + r, _v.y + r, _v.z + r);
       }
@@ -151,17 +183,58 @@ export class Sculpt {
   }
 
   private dist(p: Baked, x: number, y: number, z: number) {
-    return p.kind === 0 ? sdRoundCone(x, y, z, p) : sdEllipsoid(x, y, z, p);
+    return p.kind === 0 ? sdRoundCone(x, y, z, p) : p.kind === 1 ? sdEllipsoid(x, y, z, p) : sdRoundBox(x, y, z, p);
   }
 
   /** Field value at a point; skips primitives whose padded bounds miss it. */
+  /** Coarse bucket grid over the primitives' bounds so dense sculpts only test the primitives nearby. */
+  private grid: { lo: THREE.Vector3; cs: number; nx: number; ny: number; nz: number; cells: Baked[][] } | null = null;
+
+  private buildGrid() {
+    if (this.prims.length < 24) return;
+    const lo = new THREE.Vector3(Infinity, Infinity, Infinity), hi = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+    for (const p of this.prims) {
+      lo.min(p.min);
+      hi.max(p.max);
+    }
+    const ext = Math.max(hi.x - lo.x, hi.y - lo.y, hi.z - lo.z);
+    const cs = Math.max(ext / 24, 0.05);
+    const nx = Math.ceil((hi.x - lo.x) / cs) + 1, ny = Math.ceil((hi.y - lo.y) / cs) + 1, nz = Math.ceil((hi.z - lo.z) / cs) + 1;
+    const cells: Baked[][] = Array.from({ length: nx * ny * nz }, () => []);
+    for (const p of this.prims) {
+      const i0 = Math.floor((p.min.x - lo.x) / cs), i1 = Math.floor((p.max.x - lo.x) / cs);
+      const j0 = Math.floor((p.min.y - lo.y) / cs), j1 = Math.floor((p.max.y - lo.y) / cs);
+      const k0 = Math.floor((p.min.z - lo.z) / cs), k1 = Math.floor((p.max.z - lo.z) / cs);
+      for (let k = k0; k <= k1; k++) for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) cells[i + nx * (j + ny * k)].push(p);
+    }
+    // order matters for smooth unions and carving: keep each cell in authoring order
+    const order = new Map(this.prims.map((p, i) => [p, i]));
+    for (const c of cells) c.sort((a, b) => order.get(a)! - order.get(b)!);
+    this.grid = { lo, cs, nx, ny, nz, cells };
+  }
+
+  private near(x: number, y: number, z: number): Baked[] {
+    const g = this.grid;
+    if (!g) return this.prims;
+    const i = Math.floor((x - g.lo.x) / g.cs), j = Math.floor((y - g.lo.y) / g.cs), k = Math.floor((z - g.lo.z) / g.cs);
+    if (i < 0 || j < 0 || k < 0 || i >= g.nx || j >= g.ny || k >= g.nz) return EMPTY;
+    return g.cells[i + g.nx * (j + g.ny * k)];
+  }
+
   sample(x: number, y: number, z: number): number {
     let d = 1e9;
-    for (const p of this.prims) {
+    let near = 1e9;
+    let mat = 0;
+    for (const p of this.near(x, y, z)) {
       if (x < p.min.x || y < p.min.y || z < p.min.z || x > p.max.x || y > p.max.y || z > p.max.z) continue;
       const e = this.dist(p, x, y, z);
       d = p.sub ? smax(d, -e, p.k) : smin(d, e, p.k);
+      if (!p.sub && e < near) {
+        near = e;
+        mat = p.mat;
+      }
     }
+    if (this.detail && d < this.band && d > -this.band) d += this.detail(x, y, z, mat);
     return d;
   }
 
@@ -170,6 +243,7 @@ export class Sculpt {
    * material ids (nearest primitive) and four-bone skin weights (inverse-distance to each bone's primitives).
    */
   mesh(cell: number): SculptResult {
+    if (!this.grid) this.buildGrid();
     const lo = new THREE.Vector3(Infinity, Infinity, Infinity);
     const hi = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
     for (const p of this.prims) {
@@ -254,6 +328,7 @@ export class Sculpt {
     const pos = new Float32Array(P);
     const nor = new Float32Array(nv * 3);
     const mat = new Float32Array(nv * 4);
+    const ao = new Float32Array(nv);
     const si = new Uint16Array(nv * 4);
     const sw = new Float32Array(nv * 4);
     const e = cell * 0.5;
@@ -275,13 +350,20 @@ export class Sculpt {
       gz = this.sample(px, py, pz + e) - this.sample(px, py, pz - e);
       gl = Math.hypot(gx, gy, gz) || 1;
       nor[v * 3] = gx / gl; nor[v * 3 + 1] = gy / gl; nor[v * 3 + 2] = gz / gl;
+      // ambient occlusion straight from the field: how much closer than expected the surface is along the normal
+      let occ = 0;
+      for (let s = 1, w = 0.5; s <= 5; s++, w *= 0.6) {
+        const h = s * Math.max(cell * 1.5, 0.018);
+        occ += w * (h - this.sample(px + (nor[v * 3] * h), py + nor[v * 3 + 1] * h, pz + nor[v * 3 + 2] * h)) / h;
+      }
+      ao[v] = Math.min(1, Math.max(0.15, 1 - occ * 0.9));
       // material: nearest additive primitive; skin and armour (ids 0/1) blend softly across their border
       let best = 1e9;
       let bm = 0;
       let dS = 1e9;
       let dA = 1e9;
       boneW.clear();
-      for (const p of this.prims) {
+      for (const p of this.near(px, py, pz)) {
         if (p.sub) continue;
         if (px < p.min.x - 0.08 || py < p.min.y - 0.08 || pz < p.min.z - 0.08 || px > p.max.x + 0.08 || py > p.max.y + 0.08 || pz > p.max.z + 0.08) continue;
         const di = this.dist(p, px, py, pz);
@@ -311,6 +393,7 @@ export class Sculpt {
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
     g.setAttribute('aMat', new THREE.BufferAttribute(mat, 4));
+    g.setAttribute('aAO', new THREE.BufferAttribute(ao, 1));
     g.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4));
     g.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
     g.setIndex(I);
@@ -367,6 +450,7 @@ export function skinnedTube(
   g.setAttribute('skinIndex', new THREE.BufferAttribute(si, 4));
   g.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4));
   g.setAttribute('aMat', new THREE.BufferAttribute(m, 4));
+  g.setAttribute('aAO', new THREE.BufferAttribute(new Float32Array(n).fill(1), 1));
   g.deleteAttribute('uv');
   return g;
 }

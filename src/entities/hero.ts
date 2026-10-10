@@ -3,17 +3,35 @@ import { MeshBasicNodeMaterial } from 'three/webgpu';
 import { glowBasic } from '../engine/materials';
 import type { Skin } from '../types';
 import { clamp } from '../util/math';
-import { BONE, CREST_SEGS, CREST_STRANDS, LEG, applyLook, buildRig, heroGeometry, heroMaterial, heroUniforms, rootBladeGeometry, type HeroLook } from '../assets/heroModel';
+import { BONE, CREST_SEGS, CREST_STRANDS, LEG, applyLook, buildRig, heroGeometry, heroMaterial, heroTexturedMaterial, heroUniforms, rootBladeGeometry, type HeroLook } from '../assets/heroModel';
 import { loadedModel } from '../assets/pipeline';
 
 export type MoveMode = 'ground' | 'air' | 'flight' | 'levitate';
 
 /** Suit palettes: the Tripo reference (resonant) plus the Verdant and Void suits. */
 export const SKIN_LOOK: Record<Skin, HeroLook> = {
-  resonant: { body: 0x62b4dc, armor: 0x4a3a9e, vein: 0x4ff0ff, accent: 0x9ff3ff, dark: 0x1a2a3a },
-  verdant: { body: 0x7fc89a, armor: 0x2f6a44, vein: 0x8cff6b, accent: 0xd4ff8a, dark: 0x2a2416 },
-  void: { body: 0x9a7ab8, armor: 0x3c1236, vein: 0xff3b7a, accent: 0xff8ab6, dark: 0x1a0c16 },
+  resonant: { body: 0x62b4dc, armor: 0x4a3a9e, vein: 0x4ff0ff, accent: 0x9ff3ff, dark: 0x1a2a3a, hue: 0 },
+  verdant: { body: 0x7fc89a, armor: 0x2f6a44, vein: 0x8cff6b, accent: 0xd4ff8a, dark: 0x2a2416, hue: -0.75 },
+  void: { body: 0x9a7ab8, armor: 0x3c1236, vein: 0xff3b7a, accent: 0xff8ab6, dark: 0x1a0c16, hue: 0.6 },
 };
+
+let spearCache: THREE.BufferGeometry | null = null;
+
+/**
+ * The sculpted spear from the hero GLB, re-gripped for play: it ships in grip space with the long staff up
+ * (+Y) and the leaf blade below the hand, so it is flipped blade-up and scaled to a wieldable ~2 m, with the
+ * hand a short way under the blade like the procedural Root-Blade.
+ */
+function sculptedSpear(src: THREE.BufferGeometry): THREE.BufferGeometry {
+  if (spearCache) return spearCache;
+  const g = src.clone().rotateZ(Math.PI);
+  g.computeBoundingBox();
+  const bb = g.boundingBox!;
+  const k = 1.95 / (bb.max.y - bb.min.y);
+  g.scale(k, k, k).translate(0, 0.62 - bb.max.y * k, 0);
+  g.computeBoundingSphere();
+  return (spearCache = g);
+}
 
 export interface HeroPose {
   speed: number;
@@ -72,16 +90,26 @@ export class Hero {
   private mat: ReturnType<typeof heroMaterial>;
   private glowMat: MeshBasicNodeMaterial;
   private disposables: { dispose(): void }[] = [];
+  /** Bind height of the hips and per-leg bone lengths / rest angles (about X) for the IK solve. */
+  private hipsRest = 0.98;
+  private leg = [{ l1: LEG.thigh, l2: LEG.shin, a0: 0, a1: 0 }, { l1: LEG.thigh, l2: LEG.shin, a0: 0, a1: 0 }];
 
   constructor(skin: Skin = 'resonant') {
     for (const k of KEYS) this.cur[k] = 0;
-    const rig = buildRig();
+    // a GLB from the asset manifest replaces the sculpt when present (same rig names and sockets, its own
+    // fitted bind pose, painted PBR maps and spear)
+    const model = loadedModel('hero');
+    const rig = buildRig(model?.layout);
     this.bones = rig.bones;
-    this.mat = heroMaterial(this.u);
+    this.mat = model ? heroTexturedMaterial(this.u, model) : heroMaterial(this.u);
     this.glowMat = glowBasic({ color: 0xffffff });
     this.disposables.push(this.mat, this.glowMat);
-    // a GLB from the asset manifest replaces the sculpt when present (same rig names and sockets)
-    const geo = loadedModel('hero')?.geometry ?? heroGeometry();
+    const geo = model?.geometry ?? heroGeometry();
+    this.hipsRest = this.bones[BONE.hips].position.y;
+    for (const [i, th] of [BONE.thL, BONE.thR].entries()) {
+      const kn = this.bones[th + 1].position, ft = this.bones[th + 2].position;
+      this.leg[i] = { l1: kn.length(), l2: ft.length(), a0: Math.atan2(-kn.z, -kn.y), a1: Math.atan2(-ft.z, -ft.y) };
+    }
     this.mesh = new THREE.SkinnedMesh(geo, this.mat);
     this.mesh.add(this.bones[BONE.body]);
     this.mesh.bind(rig.skeleton);
@@ -96,7 +124,8 @@ export class Hero {
     this.disposables.push(this.bolter.geometry);
     this.bolter.visible = false;
     this.grip.add(this.bolter);
-    this.blade = new THREE.Mesh(rootBladeGeometry(), this.mat);
+    const spear = model?.extras?.rootBlade;
+    this.blade = new THREE.Mesh(spear ? sculptedSpear(spear) : rootBladeGeometry(), this.mat);
     this.blade.castShadow = true;
     this.setBlade(false);
     this.setSkin(skin);
@@ -127,7 +156,7 @@ export class Hero {
       this.blade.rotation.set(Math.PI / 2 - 0.25, 0, 0);
     } else {
       this.bones[BONE.chest].add(this.blade);
-      this.blade.position.set(0.02, 0.05, -0.17);
+      this.blade.position.set(0.02, 0.05, -0.22);
       this.blade.rotation.set(0.2, 0, 0.62);
     }
   }
@@ -258,7 +287,7 @@ export class Hero {
     const B = this.bones;
     B[BONE.body].rotation.set(c.bodyX, 0, c.bodyZ);
     B[BONE.body].position.y = p.dead ? 0.15 : 0;
-    B[BONE.hips].position.y = 0.98 + c.hipsY;
+    B[BONE.hips].position.y = this.hipsRest + c.hipsY;
     // the spine bends over two bones so the abdomen deforms smoothly
     B[BONE.spine].rotation.set(c.spX * 0.55, c.spY * 0.5, c.spZ * 0.5);
     B[BONE.chest].rotation.set(c.spX * 0.45, c.spY * 0.5, c.spZ * 0.5);
@@ -318,8 +347,8 @@ export class Hero {
     const drop = Math.min(0, this.ikOff[0], this.ikOff[1]) * this.ikW;
     B[BONE.hips].position.y += drop;
     this.root.updateWorldMatrix(true, true);
-    const L1 = LEG.thigh, L2 = LEG.shin;
     for (let i = 0; i < 2; i++) {
+      const { l1: L1, l2: L2, a0, a1 } = this.leg[i];
       const [th, kn, ft] = legs[i].map((b) => B[b]);
       ft.getWorldPosition(_t);
       _t.y += this.ikOff[i] * this.ikW;
@@ -331,9 +360,10 @@ export class Hero {
       const z = Math.atan2(dx, Math.hypot(dy, dz));
       const x = Math.atan2(-dz, -dy) - beta;
       const w = this.ikW;
-      th.rotation.x = lerp(th.rotation.x, x, w);
+      // bones whose bind offsets lean (a fitted GLB skeleton) are solved relative to their rest angles
+      th.rotation.x = lerp(th.rotation.x, x - a0, w);
       th.rotation.z = lerp(th.rotation.z, z, w);
-      kn.rotation.x = lerp(kn.rotation.x, kb, w);
+      kn.rotation.x = lerp(kn.rotation.x, kb + a0 - a1, w);
     }
   }
 

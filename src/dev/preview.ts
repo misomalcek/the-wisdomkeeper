@@ -3,9 +3,11 @@ import * as THREE from 'three';
 import { WebGPURenderer, MeshStandardNodeMaterial } from 'three/webgpu';
 import { Hero, idlePose, type HeroPose } from '../entities/hero';
 import type { Skin } from '../types';
+import { preloadAssets } from '../assets/pipeline';
 
 const renderer = new WebGPURenderer({ antialias: true, forceWebGL: new URLSearchParams(location.search).has('webgl') });
 await renderer.init();
+if (!new URLSearchParams(location.search).has('sdf')) await preloadAssets(renderer);
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 document.body.appendChild(renderer.domElement);
@@ -102,4 +104,20 @@ if (qs.has('null')) {
   floor.scale.set(1.5, 1, 3);
   cam.position.set(0, 4.2, 15.5);
   cam.lookAt(0, 3.2, 0);
+}
+(window as unknown as { __heroes: unknown }).__heroes = heroes;
+
+// ?enemy=<kind>&yaw=<rad>&d=<dist>&y=<look height>: one enemy alone, turntable close-up
+if (qs.has('enemy')) {
+  const { Enemy } = await import('../entities/enemies');
+  heroes.forEach(({ h }) => (h.root.visible = false));
+  const kind = qs.get('enemy') as 'brute' | 'drone' | 'pylon' | 'boss';
+  const e = new Enemy(kind, 0, 0, 1, 0, 'construct');
+  e.group.scale.setScalar(1);
+  e.group.position.set(0, kind === 'brute' ? 1.9 : kind === 'drone' ? 1.6 : kind === 'boss' ? 4.8 : 0, 0);
+  e.group.rotation.y = Number(qs.get('yaw') ?? 0);
+  scene.add(e.group);
+  const d = Number(qs.get('d') ?? 6), y = Number(qs.get('y') ?? 1.8);
+  cam.position.set(0, y + d * 0.12, d);
+  cam.lookAt(0, y, 0);
 }

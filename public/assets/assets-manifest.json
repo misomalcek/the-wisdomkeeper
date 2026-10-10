@@ -3,13 +3,13 @@
   "note": "Character models. A null glb means the engine sculpts the model procedurally (SDF + surface nets) on the same rig. Drop a rigged GLB (bone names as in src/assets/heroModel.ts, Draco or meshopt geometry, KTX2 textures) under public/assets/models/ and point glb at it; run `node scripts/copy-decoders.mjs` once so the decoders ship with the build.",
   "models": {
     "hero": {
-      "glb": null,
+      "glb": "models/hero.glb",
       "fallback": "sdf",
-      "height": 2.05,
+      "height": 2.1,
       "sockets": ["hand_r_root_blade", "back_thruster_pack", "head_antenna"],
       "variants": ["resonant", "verdant", "void"]
     },
-    "voidRootFiend": { "glb": null, "fallback": "sdf", "sockets": ["weak_point_core"] },
+    "voidRootFiend": { "glb": "models/void-root-fiend.glb", "fallback": "sdf", "sockets": ["weak_point_core"] },
     "nullSentryDrone": { "glb": null, "fallback": "sdf", "sockets": ["eye_lens"] },
     "rootBlade": { "glb": null, "fallback": "procedural", "sockets": ["grip"] }
   }
