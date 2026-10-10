@@ -1,0 +1,26 @@
+// Act IV visual check against the dev server: overview, Elder Tree bridges, Construct + data-river pylons.
+import { launch } from './harness.mjs';
+const { browser, page, logs } = await launch({ width: 1280, height: 720 });
+const wait = (ms) => page.waitForTimeout(ms);
+const base = process.env.WK_URL ?? 'http://127.0.0.1:5199/';
+await page.goto(base + '?debug&nolock&scale=1&noadapt');
+await wait(2500);
+await page.evaluate(() => { const g = window.__wk; g.debugGoto(3); g.god = true; });
+await wait(5000);
+await page.screenshot({ path: 'shots/veil-a.png' });
+const st = await page.evaluate(() => window.__wk.debugState());
+console.log(JSON.stringify(st.veil), JSON.stringify(st.director));
+const [tx, tz] = st.veil.tree;
+await page.evaluate(([x, z]) => { const g = window.__wk; g.debugAt(x + 34, z + 20); g.cam.yaw = Math.atan2(-34, -20); g.player.yaw = g.cam.yaw; g.cam.pitch = 0.05; }, [tx, tz]);
+await wait(3500);
+await page.screenshot({ path: 'shots/veil-tree.png' });
+await page.evaluate(() => window.__wk.debugCompleteNodes());
+await wait(800);
+const s2 = await page.evaluate(() => window.__wk.debugState());
+const [bx, bz] = s2.veil.boss;
+await page.evaluate(([x, z]) => { const g = window.__wk; g.debugAt(x + 26, z + 8); g.cam.yaw = Math.atan2(-26, -8); g.player.yaw = g.cam.yaw; g.cam.pitch = 0.18; }, [bx, bz]);
+await wait(6000);
+await page.screenshot({ path: 'shots/veil-construct.png' });
+console.log(JSON.stringify((await page.evaluate(() => window.__wk.debugState())).veil));
+console.log(logs.filter((l) => !/WebGPU is not available/.test(l)).join('\n') || 'no console errors');
+await browser.close();

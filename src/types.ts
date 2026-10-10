@@ -1,6 +1,9 @@
+import type { PlayerTelemetry } from './bio/mindState';
 export type Affinity = 'root' | 'echo' | 'flow';
-export type StratumId = 'seedbed' | 'river' | 'canopy' | 'mirror' | 'return';
-export type EnemyKind = 'mite' | 'spitter' | 'brute' | 'boss';
+export type StratumId = 'seedbed' | 'river' | 'canopy' | 'veil' | 'mirror' | 'return';
+export type EnemyKind = 'mite' | 'spitter' | 'brute' | 'drone' | 'pylon' | 'boss';
+/** Which boss a stratum fields: the Null Warden (Interlude) or the Void-Infused Construct (Act IV). */
+export type BossVariant = 'warden' | 'construct';
 export type Slot = 'helm' | 'armor' | 'boots' | 'blade' | 'modulator' | 'core';
 export type Rarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
 export type StatKey = 'life' | 'damage' | 'resRegen' | 'resMax' | 'dr' | 'speed' | 'dashCd' | 'power' | 'voidDmg';
@@ -92,6 +95,12 @@ export interface RunState {
   remembrances: Remembrance[];
   /** Mycelial Fiber carried between regions (flight/levitation fuel). Optional for older saves. */
   fiber?: number;
+  /** Void Crystals: currency from pylon purges and Null defeats, spent to infuse gear. */
+  crystals?: number;
+  /** Blueprint player telemetry fed to the Mycelial Mind state machine. */
+  telemetry?: PlayerTelemetry;
+  /** Side missions offered by the Neural World Director. */
+  missions?: Mission[];
 }
 
 export interface LibraryEntry {
@@ -100,4 +109,22 @@ export interface LibraryEntry {
   ending: string;
   text: string;
   date: string;
+}
+
+export type MissionKind = 'pool' | 'harvest' | 'hunt' | 'contact';
+export interface Mission {
+  id: number;
+  kind: MissionKind;
+  title: string;
+  brief: string;
+  /** stratum index the mission belongs to */
+  stratum: number;
+  x: number;
+  z: number;
+  need: number;
+  have: number;
+  reward: number;
+  /** pool: camp id · hunt: 1 drones / 0 fiends · otherwise -1 */
+  target: number;
+  state: 'active' | 'done';
 }

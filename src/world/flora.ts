@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { MeshBasicNodeMaterial } from 'three/webgpu';
-import { glowBasic, standard, selfLit } from '../engine/materials';
+import { glowBasic, standard, selfLit, floraGlow } from '../engine/materials';
 import type { NodeMaterial } from 'three/webgpu';
 import type { Rng } from '../util/rng';
 import type { StratumDef } from '../story/strata';
@@ -120,7 +120,7 @@ export function buildFlora(def: StratumDef, terrain: Terrain, rng: Rng, density:
       standard({ color: 0xffffff, metalness: 0.1, roughness: 0.6 }),
       sproutCount,
     );
-    const tip = mk(new THREE.OctahedronGeometry(0.16, 0), glowBasic(), sproutCount);
+    const tip = mk(new THREE.OctahedronGeometry(0.16, 0), glowBasic({}, floraGlow), sproutCount);
     for (let i = 0; i < sproutCount; i++) {
       const p = spot(2, R * 1.02, 0.3);
       if (!p) continue;
@@ -141,7 +141,7 @@ export function buildFlora(def: StratumDef, terrain: Terrain, rng: Rng, density:
       standard({ color: 0xffffff, metalness: 0.2, roughness: 0.55, flatShading: true }),
       monoCount,
     );
-    const seam = mk(new THREE.BoxGeometry(0.1, 1, 0.5).translate(0, 0.5, 0), glowBasic(), monoCount);
+    const seam = mk(new THREE.BoxGeometry(0.1, 1, 0.5).translate(0, 0.5, 0), glowBasic({}, floraGlow), monoCount);
     for (let i = 0; i < monoCount; i++) {
       const p = spot(6, R * 0.98, 0.1);
       if (!p) continue;
@@ -186,7 +186,7 @@ export function buildFlora(def: StratumDef, terrain: Terrain, rng: Rng, density:
     const lilyN = n(80);
     const lily = mk(
       new THREE.CircleGeometry(1, 14).rotateX(-Math.PI / 2),
-      glowBasic({ side: THREE.DoubleSide }),
+      glowBasic({ side: THREE.DoubleSide }, floraGlow),
       lilyN,
     );
     for (let i = 0; i < lilyN; i++) {
@@ -214,10 +214,10 @@ export function buildFlora(def: StratumDef, terrain: Terrain, rng: Rng, density:
   // ---- fractal trees (canopy) + blackened Null-grove trees around enemy camps --------------------
   const UPv = UP;
   const branchesLive = def.flora === 'canopy' ? mk(new THREE.CylinderGeometry(0.62, 1, 1, 5).translate(0, 0.5, 0), standard({ roughness: 0.6, metalness: 0.05 }), Math.round(16 * density * (R / 62) * (R / 62) * 0.7) * 170 + 400) : null;
-  const tipsLive = def.flora === 'canopy' ? mk(new THREE.IcosahedronGeometry(0.3, 0), glowBasic(), Math.round(16 * density * (R / 62) * (R / 62) * 0.7) * 90 + 200) : null;
+  const tipsLive = def.flora === 'canopy' ? mk(new THREE.IcosahedronGeometry(0.3, 0), glowBasic({}, floraGlow), Math.round(16 * density * (R / 62) * (R / 62) * 0.7) * 90 + 200) : null;
   const deadN = groves.length * 8;
   const branchesDead = deadN ? mk(new THREE.CylinderGeometry(0.55, 1, 1, 5).translate(0, 0.5, 0), standard({ roughness: 0.8, metalness: 0.05 }), deadN * 90) : null;
-  const tipsDead = deadN ? mk(new THREE.OctahedronGeometry(0.22, 0), glowBasic(), deadN * 50) : null;
+  const tipsDead = deadN ? mk(new THREE.OctahedronGeometry(0.22, 0), glowBasic({}, floraGlow), deadN * 50) : null;
 
   const growTree = (
     base: THREE.Vector3, dir: THREE.Vector3, len: number, rad: number, depth: number, maxDepth: number,

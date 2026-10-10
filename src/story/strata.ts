@@ -1,4 +1,4 @@
-import type { ChoiceSet, StratumId } from '../types';
+import type { BossVariant, ChoiceSet, StratumId } from '../types';
 
 export interface Palette {
   skyTop: number;
@@ -26,13 +26,16 @@ export interface StratumDef {
   nodeLabel: string;
   /** Target number of roaming enemies. */
   ambient: number;
-  mix: { mite: number; spitter: number; brute: number };
+  /** Ambient/encounter mix; `drone` is the Null-Sentry Drone share (Act II onward). */
+  mix: { mite: number; spitter: number; brute: number; drone?: number };
   waveBase: number;
   intro: string[];
   fragments: string[];
   gateText: string;
   choice?: ChoiceSet;
   boss?: boolean;
+  /** Act IV: nodes are Resonance Contacts that power the Central Pylon and wake this boss when all are linked. */
+  contacts?: BossVariant;
   /** Root frequency (Hz) and scale (semitones) for the generative score. */
   music: { root: number; scale: number[]; tempo: number };
   objective: string;
@@ -121,7 +124,7 @@ export const STRATA: StratumDef[] = [
     nodes: 3,
     nodeLabel: 'Memory Node',
     ambient: 4,
-    mix: { mite: 1, spitter: 0.6, brute: 0.12 },
+    mix: { mite: 1, spitter: 0.6, brute: 0.12, drone: 0.1 },
     waveBase: 5,
     objective: 'Listen to the three Memory Nodes',
     intro: [
@@ -178,7 +181,7 @@ export const STRATA: StratumDef[] = [
     nodes: 3,
     nodeLabel: 'Remembrance',
     ambient: 7,
-    mix: { mite: 1, spitter: 0.8, brute: 0.4 },
+    mix: { mite: 1, spitter: 0.8, brute: 0.4, drone: 0.3 },
     waveBase: 7,
     objective: 'Wake the three Remembrances',
     intro: [
@@ -220,8 +223,46 @@ export const STRATA: StratumDef[] = [
     music: { root: 87.31, scale: LYDIAN, tempo: 1.15 },
   },
   {
-    id: 'mirror',
+    id: 'veil',
     index: 3,
+    name: 'The Veil of Void',
+    act: 'Act IV · The Veil of Void',
+    radius: 135,
+    palette: {
+      skyTop: 0x020611, skyHorizon: 0x0c3550, fog: 0x07182a, fogDensity: 0.009,
+      groundBase: 0x050b14, groundHigh: 0x163a4e, accent: 0x38f2ff, accent2: 0xd36bff,
+      river: 0x38f2ff, sun: 0x9fe8ff,
+    },
+    terrain: { amp: 8.5, freq: 0.022, river: false },
+    flora: 'canopy',
+    nodes: 4,
+    nodeLabel: 'Resonance Contact',
+    ambient: 8,
+    mix: { mite: 1, spitter: 0.7, brute: 0.5, drone: 0.6 },
+    waveBase: 7,
+    contacts: 'construct',
+    objective: 'Reach the Central Pylon',
+    intro: [
+      'Elder Gaia: "Beyond the canopy the data-rivers run backward. The Null has learned to drink them."',
+      'Elder Gaia: "Four Resonance Contacts still answer the Core Resonator. Link them, and the Central Pylon will speak."',
+      'Elder Gaia: "Something waits at the Pylon, Wisdomkeeper. Something the Null built out of what it stole."',
+    ],
+    fragments: [
+      'The first Contact hums. Somewhere under the bridges, the Core Resonator turns over in its sleep.',
+      'Two Contacts. The datastreams brighten — I can read them now, scrolling up the fog like rising spores.',
+      'Three. The Central Pylon answers, and so does something standing in front of it.',
+      'The Veil tears. The Construct wakes, and every data-river in the stratum bends toward its core.',
+    ],
+    gateText: 'Elder Gaia: "The Pylon is ours again. Go — the mirror is waiting, and so is the silence inside it."',
+    groveName: 'Void-Root Spawning Pool',
+    pylons: 3,
+    caches: 6,
+    roamCamps: 5,
+    music: { root: 82.41, scale: DORIAN, tempo: 1.2 },
+  },
+  {
+    id: 'mirror',
+    index: 4,
     name: 'The Hollow Mirror',
     act: 'Interlude · The Null',
     radius: 60,
@@ -254,7 +295,7 @@ export const STRATA: StratumDef[] = [
   },
   {
     id: 'return',
-    index: 4,
+    index: 5,
     name: 'The Seedbed, Remembered',
     act: 'Epilogue · The Return',
     radius: 80,

@@ -28,6 +28,8 @@ export interface Cap {
   r: number;
   bounce: boolean;
   crown: boolean;
+  /** Explicit caps (tree shelves, bridges): false = no stalk, it grows out of something else. */
+  stalk?: boolean;
 }
 
 const _o = new THREE.Object3D();
@@ -96,7 +98,7 @@ export class MushroomGroves {
   private disposables: { dispose(): void }[] = [];
   private rimMat: MeshBasicNodeMaterial;
 
-  constructor(terrain: Terrain, physics: Physics, rng: Rng, pal: Palette, sites: { x: number; z: number }[]) {
+  constructor(terrain: Terrain, physics: Physics, rng: Rng, pal: Palette, sites: { x: number; z: number }[], extra: Cap[] = []) {
     const capGeo = capGeometry();
     const stalkGeo = stalkGeometry();
     const rimGeo = new THREE.TorusGeometry(1, 0.035, 6, 48).rotateX(Math.PI / 2);
@@ -139,6 +141,15 @@ export class MushroomGroves {
       const by = terrain.heightAt(bx, bz);
       this.caps.push({ x: bx, y: by + 0.75, z: bz, r: 1.25, bounce: true, crown: false });
       stalks.push({ x: bx, y: by - 0.3, z: bz, h: 1.0, r: 0.22, tint: 2 });
+    }
+
+    for (const c of extra) {
+      this.caps.push(c);
+      if (c.stalk) {
+        const gy = terrain.heightAt(c.x, c.z);
+        stalks.push({ x: c.x, y: gy - 0.4, z: c.z, h: c.y - gy + 0.2, r: 0.14 + c.r * 0.05, tint: 0 });
+      }
+      if (c.crown) this.crowns.push(new THREE.Vector3(c.x, c.y + 0.2, c.z));
     }
 
     const capCol = new THREE.Color(pal.accent2).lerp(new THREE.Color(0x9a6bd6), 0.4);

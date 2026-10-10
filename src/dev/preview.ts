@@ -82,3 +82,24 @@ if (qs.has('fiend')) {
   cam.position.set(0, 2.2, 7.5);
   cam.lookAt(0, 1.6, 0);
 }
+
+// ?null: the Null's machines lined up with the hero for scale — drone, data-river pylon, Void-Infused Construct
+if (qs.has('null')) {
+  const { Enemy } = await import('../entities/enemies');
+  heroes.forEach(({ h }, i) => (h.root.visible = i === 0));
+  heroes[0].h.root.position.set(-2.4, 0, 1.5);
+  const mk = (kind: 'drone' | 'pylon' | 'boss', x: number, z: number, y: number, yaw: number) => {
+    const e = new Enemy(kind, x, z, 1, 0, 'construct');
+    e.group.scale.setScalar(1);
+    e.group.position.set(x, y, z);
+    e.group.rotation.y = yaw;
+    scene.add(e.group);
+    return e;
+  };
+  mk('drone', -4.2, 1, 2.6, 0.5);
+  mk('pylon', 5.5, -1, 0, 0);
+  mk('boss', 0.6, -3, 0, 0.25);
+  floor.scale.set(1.5, 1, 3);
+  cam.position.set(0, 4.2, 15.5);
+  cam.lookAt(0, 3.2, 0);
+}

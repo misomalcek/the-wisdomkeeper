@@ -15,6 +15,12 @@ export type N = any;
  */
 export const worldTime: N = uniform(0);
 
+/**
+ * Bioluminescence gain of the living world (flora tips, mycelial cords, wild glow), driven by the Mycelial Mind's
+ * `floraGlowIntensity` directive: the network brightens or dims as the hero's play style feeds it.
+ */
+export const floraGlow: N = uniform(1);
+
 // ---------------------------------------------------------------------------------------------
 // Noise
 // ---------------------------------------------------------------------------------------------
@@ -66,7 +72,7 @@ export const fresnel = (power = 3): N => {
  * Marks an unlit material as light-emitting: its colour is written into the emissive MRT target,
  * which is the only buffer the bloom pass reads. Lit materials route through `emissiveNode` instead.
  */
-export function glow<T extends NodeMaterial>(m: T, k = 1): T {
+export function glow<T extends NodeMaterial>(m: T, k: number | N = 1): T {
   m.mrtNode = mrt({ output, emissive: vec4(output.rgb.mul(k).mul(fogKeep), output.a) });
   return m;
 }
@@ -205,7 +211,7 @@ export function conduction(cyan: N, harmonic: N, filament: N): N {
 }
 
 /** Unlit light-emitting surface (rings, beams, cores, sparks): MeshBasic routed into bloom. */
-export function glowBasic(params: THREE.MeshBasicMaterialParameters = {}, k = 1) {
+export function glowBasic(params: THREE.MeshBasicMaterialParameters = {}, k: number | N = 1) {
   return glow(new MeshBasicNodeMaterial(params), k);
 }
 

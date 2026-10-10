@@ -4,7 +4,8 @@ import type { Game } from '../game';
 import type { Item } from '../types';
 import { RARITY } from '../systems/progress';
 
-export type PickupKind = 'heal' | 'res' | 'gear' | 'fiber';
+export type PickupKind = 'heal' | 'res' | 'gear' | 'fiber' | 'crystal';
+type Drop = 'heal' | 'res' | 'fiber' | 'crystal';
 interface Pickup {
   kind: PickupKind;
   x: number; z: number; y: number;
@@ -23,6 +24,8 @@ const COL = {
   heal: new THREE.Color(0x7cff6b).multiplyScalar(2.6),
   res: new THREE.Color(0x4fb4ff).multiplyScalar(2.8),
   fiber: new THREE.Color(0xc2ff7a).multiplyScalar(2.6),
+  /** Void Crystal: the blueprint's currency, from pylon purges and Null defeats */
+  crystal: new THREE.Color(0xb46bff).multiplyScalar(3.2),
 };
 
 export class Pickups {
@@ -47,12 +50,12 @@ export class Pickups {
     this.group.add(this.mesh, this.beams);
   }
 
-  drop(x: number, z: number, kind: 'heal' | 'res' | 'fiber') {
+  drop(x: number, z: number, kind: Drop) {
     this.push({ kind, x, z, y: 0, vx: (Math.random() - 0.5) * 8, vz: (Math.random() - 0.5) * 8, life: 24, phase: Math.random() * 6 });
   }
 
   /** A pickup resting at a fixed height (crown caps, ledges). `life` defaults to the whole visit. */
-  place(x: number, y: number, z: number, kind: 'heal' | 'res' | 'fiber', life = 1e9) {
+  place(x: number, y: number, z: number, kind: Drop, life = 1e9) {
     this.push({ kind, x, z, y, vx: 0, vz: 0, life, phase: Math.random() * 6, fixedY: y });
   }
 
@@ -104,18 +107,18 @@ export class Pickups {
       _o.position.set(it.x, it.y, it.z);
       _o.rotation.set(game.time * 2 + it.phase, game.time * 3, 0);
       const fade = it.life < 3 ? (Math.sin(game.time * 20) > 0 ? 1 : 0.3) : 1;
-      _o.scale.setScalar(fade * (it.kind === 'gear' ? 1.5 : it.fixedY !== undefined ? 1.6 : 1));
+      _o.scale.setScalar(fade * (it.kind === 'gear' ? 1.5 : it.kind === 'crystal' ? 1.25 : it.fixedY !== undefined ? 1.6 : 1));
       _o.updateMatrix();
       this.mesh.setMatrixAt(n, _o.matrix);
-      this.mesh.setColorAt(n, it.color ?? COL[it.kind as 'heal' | 'res' | 'fiber']);
+      this.mesh.setColorAt(n, it.color ?? COL[it.kind as Drop]);
       n++;
-      if ((it.kind === 'gear' && it.item && it.item.rarity !== 'common') || (it.fixedY !== undefined && it.kind === 'fiber')) {
+      if ((it.kind === 'gear' && it.item && it.item.rarity !== 'common') || (it.fixedY !== undefined && it.kind === 'fiber') || it.kind === 'crystal') {
         _o.position.set(it.x, it.y - 0.8, it.z);
         _o.rotation.set(0, 0, 0);
         _o.scale.set(1, 1, 1);
         _o.updateMatrix();
         this.beams.setMatrixAt(b, _o.matrix);
-        this.beams.setColorAt(b, it.color ?? COL.fiber);
+        this.beams.setColorAt(b, it.color ?? (it.kind === 'crystal' ? COL.crystal : COL.fiber));
         b++;
       }
     }

@@ -395,7 +395,11 @@ export class Player {
 
     // conducted flow: rivers of light lift the hero automatically
     const river = terrain.riverAt(this.x, this.z);
-    if (river > 0.5 && this.y - this.groundY < 2.2 && this.vy <= 0.5) {
+    // mycelial cords lift you too, when you run with their grain
+    const cord = river > 0.5 ? 0 : g.cordAt(this.x, this.z);
+    const f = cord > 0.65 ? g.flowAt(this.x, this.z) : null;
+    const along = f ? (this.vx * f.x + this.vz * f.y) / ((Math.hypot(this.vx, this.vz) || 1) * (Math.hypot(f.x, f.y) || 1)) : 0;
+    if ((river > 0.5 || (cord > 0.65 && Math.hypot(this.vx, this.vz) > 6 && Math.abs(along) > 0.85)) && this.y - this.groundY < 2.2 && this.vy <= 0.5) {
       this.mode = 'levitate';
       this.levManual = false;
       g.particles.ring(_v.set(this.x, this.groundY + 0.4, this.z), g.palette.accent2HDR, 18, 4, 0.4, 0.6);
@@ -427,7 +431,8 @@ export class Player {
   private levitate(g: Game, dt: number, it: Intent, speedMul: number, active: boolean, moving: boolean) {
     const terrain = g.world.terrain;
     const river = terrain.riverAt(this.x, this.z);
-    const onFlow = river > 0.25;
+    // conducted flow: a river, or one of the glowing mycelial cords
+    const onFlow = river > 0.25 || g.cordAt(this.x, this.z) > 0.3;
     if (!onFlow && !this.levManual) {
       this.mode = 'air';
       return;
@@ -438,15 +443,17 @@ export class Player {
     const tz = active && moving ? it.mz * maxSp : 0;
     this.vx = damp(this.vx, tx, moving ? LEV.acceleration * 0.4 : LEV.dragDamping, dt);
     this.vz = damp(this.vz, tz, moving ? LEV.acceleration * 0.4 : LEV.dragDamping, dt);
-    const surface = onFlow ? Math.max(this.groundY, terrain.waterY(this.x, this.z)) : this.groundY;
+    const surface = river > 0.25 ? Math.max(this.groundY, terrain.waterY(this.x, this.z)) : this.groundY;
     const target = surface + HOVER_H + Math.sin(g.time * 2.2) * 0.06;
     this.vy = clamp((target - this.y) * 9, -14, 14);
     this.grounded = false;
     if (onFlow) {
       // flow-induced draft: the current carries the hero downstream
       const f = g.flowAt(this.x, this.z);
-      this.vx += f.x * dt * 2.4;
-      this.vz += f.y * dt * 2.4;
+      // cords carry you whichever way you ride them; rivers only downstream
+      const sgn = river <= 0.25 && this.vx * f.x + this.vz * f.y < 0 ? -1 : 1;
+      this.vx += f.x * sgn * dt * 2.4;
+      this.vz += f.y * sgn * dt * 2.4;
     } else if (active && !this.spendFuel(LEV.resonanceCostPerSec * 2.5 * g.derived.flightDrain * dt)) {
       this.levManual = false;
       this.mode = 'air';

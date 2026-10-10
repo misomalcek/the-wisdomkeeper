@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Affinity, Choice, EnemyKind, Item, LibraryEntry, PlayStats, Remembrance, RunState, Skin } from './types';
+import type { Affinity, BossVariant, Choice, EnemyKind, Item, LibraryEntry, PlayStats, Remembrance, RunState, Skin } from './types';
 import { setPortraitRenderer } from './ui/portrait';
 import { Gfx } from './engine/gfx';
 import { ThirdPersonCam } from './engine/camera';
@@ -15,12 +15,16 @@ import {
 } from './story/story';
 import { MycelialMind, NEUTRAL_LATENT, adaptDifficulty, describeStyle, digest, freshStats } from './systems/mind';
 import { Encounter, type Anchor } from './systems/encounter';
+import { infuse, infuseCost, missionLine, offerMissions } from './systems/missions';
 import { Combat, COST } from './systems/combat';
 import {
   RARITY, SLOT_LABEL, addXp, derive, generateItem, rankUp, rollRarity, skinUnlocked, xpToNext, type Derived,
 } from './systems/progress';
 import { Player, type Intent } from './entities/player';
-import { Enemy, ENEMY_COST, ENEMY_NAME, updateEnemy } from './entities/enemies';
+import { Enemy, ENEMY_COST, ENEMY_NAME, enemyName, purgeStun, updateEnemy, updateSquads } from './entities/enemies';
+import { NeuralDirector, type DirectorPhase } from './bio/director';
+import { freshTelemetry, type PlayerTelemetry } from './bio/mindState';
+import { floraGlow } from './engine/materials';
 import { BOLT_COLORS, Projectiles } from './entities/projectiles';
 import { Pickups, type PickupKind } from './entities/pickups';
 import { AFFINITY_COLOR } from './entities/echoes';
@@ -99,6 +103,8 @@ export class Game {
   def: StratumDef = STRATA[0];
   run!: RunState;
   mind!: MycelialMind;
+  /** Neural World Director: reservoir → memristor → SHA-256 pool → pacing, spawning pools, loot entropy. */
+  director!: NeuralDirector;
   derived!: Derived;
   stats: PlayStats = freshStats();
   mode: Mode = 'title';
@@ -146,6 +152,16 @@ export class Game {
   private wheelHold = 0;
   /** Time scale while the traversal wheel is open. */
   private slowmo = 1;
+  private lastHurtT = -99;
+  private directorPhase: DirectorPhase = 'calm';
+  /** Act IV: the Construct's data-river pylons and the breach window when they all fall. */
+  private veil: { pylons: Enemy[]; breach: number; wave: number } | null = null;
+  private contactsLinked = 0;
+
+  /** Blueprint telemetry for the Mycelial Mind (persisted with the run). */
+  get telemetry(): PlayerTelemetry {
+    return (this.run.telemetry ??= freshTelemetry());
+  }
 
   constructor(gfx: Gfx) {
     this.gfx = gfx;
@@ -349,8 +365,11 @@ export class Game {
       nullPoints: 0,
       purityPoints: 0,
       remembrances: [],
+      crystals: 0,
+      telemetry: freshTelemetry(),
     };
     this.mind = new MycelialMind(seed);
+    this.director = new NeuralDirector(seed);
     this.diff = this.run.difficulty;
     this.refreshDerived();
   }
@@ -397,6 +416,7 @@ export class Game {
   private continueRun(r: RunState) {
     this.run = r;
     this.mind = new MycelialMind(r.seed);
+    this.director = new NeuralDirector(r.seed ^ r.elapsed);
     this.diff = r.difficulty;
     this.refreshDerived();
     this.ui.hide('title');
@@ -466,6 +486,8 @@ export class Game {
     this.camps = [];
     this.encounter = null;
     this.boss = null;
+    this.veil = null;
+    this.contactsLinked = 0;
     this.projectiles.clear();
     this.pickups.clear();
     this.particles.clear();
@@ -516,6 +538,7 @@ export class Game {
     }
 
     this.spawnCamps();
+    this.offerStratumMissions();
     if (this.def.boss) {
       this.spawnEnemy('boss', 0, 0, false);
       this.boss = this.enemies.find((e) => e.kind === 'boss') ?? null;
@@ -529,7 +552,7 @@ export class Game {
     window.setTimeout(() => {
       if (this.run.stratumIndex !== index) return;
       this.ui.say(this.def.intro);
-      if (this.pendingNote && index > 0 && index < 4) this.ui.say(`The Mycelial Mind noticed — ${this.pendingNote}`);
+      if (this.pendingNote && index > 0 && !this.def.boss && this.def.id !== 'return') this.ui.say(`The Mycelial Mind noticed — ${this.pendingNote}`);
       this.pendingNote = '';
     }, 1800);
     this.saveRun();
@@ -779,8 +802,16 @@ export class Game {
   }
 
   flowAt(x: number, z: number) {
-    return this.world.terrain.flowAt(x, z, this.flow);
+    const f = this.world.terrain.flowAt(x, z, this.flow);
+    if (f.x === 0 && f.y === 0 && this.world.mycelium.cordAt(x, z, this.cordTmp) > 0) f.set(this.cordTmp.x * 6, this.cordTmp.y * 6);
+    return f;
   }
+
+  /** Strength (0..1) of a conducted mycelial cord under (x, z): the hero levitates along it for free. */
+  cordAt(x: number, z: number) {
+    return this.world.mycelium.cordAt(x, z, this.cordTmp);
+  }
+  private cordTmp = { x: 0, y: 0 };
 
   private buildIntent(dead: boolean): Intent {
     const inp = this.input;
@@ -904,9 +935,15 @@ export class Game {
     if (this.encounter && !dead && this.encounter.enc.update(this, dt)) this.finishEncounter();
 
     this.updatePending(dt);
-    if (!dead) this.updateAmbient(dt);
+    if (!dead) {
+      this.updateDirector(dt);
+      this.updateAmbient(dt);
+    }
+    this.updateVeil(dt);
+    if (!dead) this.updateMissionSites(dt);
 
     this.enemyTimeScale = damp(this.enemyTimeScale, 1, 3, dt);
+    updateSquads(this);
     for (const e of this.enemies) if (!e.dead) updateEnemy(e, this, dt);
     this.enemies = this.enemies.filter((e) => {
       if (e.dead) {
@@ -1017,6 +1054,8 @@ export class Game {
   }
 
   onEnemyKilled(e: Enemy) {
+    if (e.kind === 'drone') this.missionProgress('hunt', 1, e.x, e.z, 1);
+    else if (e.kind === 'brute') this.missionProgress('hunt', 1, e.x, e.z, 0);
     if (e.campId < 0) return;
     const c = this.camps.find((x) => x.spec.id === e.campId);
     if (!c || c.cleared) return;
@@ -1026,6 +1065,7 @@ export class Game {
       this.audio.sfx('ready');
       this.audio.sfx('plant');
       this.ui.toast(`${c.spec.name} purged`);
+      this.missionProgress('pool', 1, c.spec.x, c.spec.z, c.spec.id);
       this.dropLoot(c.spec.x, c.spec.z, 'cache');
       this.plantEcho(c.spec.x, c.spec.z, 'node');
       this.world.mycelium.seed(c.spec.x, c.spec.z, 10, 0, 80);
@@ -1071,8 +1111,8 @@ export class Game {
     }
   }
 
-  private makeEnemy(kind: EnemyKind, x: number, z: number, fromEvent: boolean): Enemy {
-    const e = new Enemy(kind, x, z, this.diff, this.world.terrain.heightAt(x, z));
+  private makeEnemy(kind: EnemyKind, x: number, z: number, fromEvent: boolean, variant: BossVariant = 'warden'): Enemy {
+    const e = new Enemy(kind, x, z, this.diff, this.world.terrain.heightAt(x, z), variant);
     e.fromEvent = fromEvent;
     this.enemies.push(e);
     this.gfx.scene.add(e.group);
@@ -1080,27 +1120,28 @@ export class Game {
     return e;
   }
 
-  spawnEnemy(kind: EnemyKind, x: number, z: number, fromEvent: boolean) {
-    if (this.enemies.length > 70) return;
-    this.makeEnemy(kind, x, z, fromEvent);
+  spawnEnemy(kind: EnemyKind, x: number, z: number, fromEvent: boolean, variant: BossVariant = 'warden') {
+    if (this.enemies.length > 70 && kind !== 'boss' && kind !== 'pylon') return;
+    const e = this.makeEnemy(kind, x, z, fromEvent, variant);
     const y = this.world.terrain.heightAt(x, z);
     this.particles.burst(new THREE.Vector3(x, y + 1, z), HOT, kind === 'boss' ? 40 : 10, 6, 0.5, 0.6);
+    return e;
   }
 
   spawnBudget(budget: number, cx: number, cz: number, fromEvent: boolean) {
     const mix = this.def.mix;
-    const kinds = (['mite', 'spitter', 'brute'] as const).filter((k) => mix[k] > 0);
+    const kinds = (['mite', 'spitter', 'brute', 'drone'] as const).filter((k) => (mix[k] ?? 0) > 0);
     if (!kinds.length) return;
     let left = budget;
     let guard = 0;
     while (left > 0 && guard++ < 30) {
       const options = kinds.filter((k) => ENEMY_COST[k] <= left);
       if (!options.length) break;
-      const total = options.reduce((a, k) => a + mix[k], 0);
-      let roll = Math.random() * total;
+      const total = options.reduce((a, k) => a + (mix[k] ?? 0), 0);
+      let roll = this.director.random() * total;
       let kind = options[0];
       for (const k of options) {
-        roll -= mix[k];
+        roll -= mix[k] ?? 0;
         if (roll <= 0) {
           kind = k;
           break;
@@ -1122,15 +1163,18 @@ export class Game {
 
   private updateAmbient(dt: number) {
     if (this.def.ambient <= 0 || this.def.boss || this.mode !== 'play' || this.trans) return;
+    if (this.boss && this.boss.activated && !this.boss.dead) return;
     this.ambientTimer -= dt;
     if (this.ambientTimer > 0) return;
-    this.ambientTimer = 4;
+    const dir = this.director.out;
+    // the Director's pacing curve stretches or tightens the hunt
+    this.ambientTimer = dir.phase === 'surge' ? 2.5 : dir.phase === 'respite' ? 7 : 4;
     const p = this.player;
     const terrain = this.world.terrain;
     // the farther into the Wilds, and the deeper into Null blight, the more the Null hunts you
     const wildness = terrain.wildness(p.x, p.z);
     const blight = terrain.blightAt(p.x, p.z);
-    const target = Math.round((this.def.ambient * (0.7 + 0.3 * this.diff)) / 2 + wildness * 2 + blight * 3);
+    const target = Math.round(((this.def.ambient * (0.7 + 0.3 * this.diff)) / 2 + wildness * 2 + blight * 3) * dir.threat);
     const ambientAlive = this.enemies.filter((e) => !e.dead && !e.fromEvent && e.campId < 0).length + this.pending.filter((s) => !s.fromEvent).length;
     if (ambientAlive >= target) return;
     if (this.world.nodes.length && this.world.nodes.every((n) => n.state === 'done') && this.gateOpen()) return;
@@ -1142,14 +1186,20 @@ export class Game {
       const z = p.z + Math.sin(a) * r;
       if (!terrain.wild && Math.hypot(x, z) > R) continue;
       if (terrain.riverAt(x, z) > 0.3) continue;
-      if (blight > 0.3 && this.def.mix.brute > 0 && Math.random() < 0.25) {
+      const rnd = () => this.director.random();
+      // spawning pools: entropy spikes and surges feed Void-Root Fiends
+      if (this.def.mix.brute > 0 && rnd() < (blight > 0.3 ? 0.25 : 0) + dir.fiendBias) {
         this.queueSpawn('brute', x, z, false);
         return;
       }
       const mix = this.def.mix;
+      if ((mix.drone ?? 0) > 0 && rnd() < (mix.drone ?? 0) * (dir.phase === 'calm' ? 0.25 : 0.45)) {
+        this.queueSpawn('drone', x, z, false);
+        return;
+      }
       const kinds = (['mite', 'spitter'] as const).filter((k) => mix[k] > 0);
       const total = kinds.reduce((s, k) => s + mix[k], 0);
-      let roll = Math.random() * total;
+      let roll = rnd() * total;
       let kind = kinds[0];
       for (const k of kinds) {
         roll -= mix[k];
@@ -1161,6 +1211,231 @@ export class Game {
       this.queueSpawn(kind, x, z, false);
       return;
     }
+  }
+
+  // ---------------------------------------------------------------- Neural World Director
+
+  private updateDirector(dt: number) {
+    const p = this.player;
+    const t = this.telemetry;
+    if (p.mode === 'flight') t.flightTime += dt;
+    const engaged = this.enemies.reduce((n, e) => n + (!e.dead && !e.idle && e.engage ? 1 : 0), 0);
+    const out = this.director.update(dt, { hp: p.hp / this.derived.maxHp, engaged, sinceHurt: this.time - this.lastHurtT, difficulty: this.diff }, t);
+    // the Mycelial Mind's directive drives the world's bioluminescence (smoothed so it breathes, never pops)
+    const glowTarget = clamp(out.directives.floraGlowIntensity / 1.8, 0.6, 1.6) * (out.phase === 'surge' ? 0.85 : 1);
+    floraGlow.value += (glowTarget - floraGlow.value) * Math.min(1, dt * 0.5);
+    if (out.phase !== this.directorPhase) {
+      this.directorPhase = out.phase;
+      if (this.def.ambient > 0 && !this.def.boss && !(this.boss && this.boss.activated)) {
+        if (out.phase === 'stirring') this.ui.toast('The mycelium stirs — the Null is gathering');
+        else if (out.phase === 'surge') {
+          this.ui.toast('Null surge — spawning pools are boiling over');
+          this.audio.sfx('boss', 0.6);
+        } else if (out.phase === 'respite') this.ui.toast('The network quiets. Breathe.');
+      }
+    }
+  }
+
+  /** Scatter Void Crystals (the blueprint currency) around a point. */
+  dropCrystals(x: number, z: number, n: number) {
+    for (let i = 0; i < n; i++) this.pickups.drop(x, z, 'crystal');
+  }
+
+  // ---------------------------------------------------------------- side missions
+
+  private get missions() {
+    return (this.run.missions ??= []);
+  }
+
+  private activeMissions() {
+    return this.missions.filter((m) => m.stratum === this.def.index);
+  }
+
+  private offerStratumMissions() {
+    if (this.activeMissions().length) return;
+    const w = this.world;
+    const R = w.radius;
+    const next = this.missions.reduce((n, m) => Math.max(n, m.id + 1), 1);
+    const site = (rnd: () => number) => {
+      for (let i = 0; i < 40; i++) {
+        const a = rnd() * Math.PI * 2;
+        const r = R * (0.35 + rnd() * 0.5);
+        const x = Math.cos(a) * r;
+        const z = Math.sin(a) * r;
+        if (w.terrain.riverAt(x, z) < 0.05 && Math.hypot(x - w.startPos.x, z - w.startPos.z) > 30) return { x, z };
+      }
+      return null;
+    };
+    const got = offerMissions(this.def, w.camps, () => this.director.random(), next, site);
+    if (!got.length) return;
+    this.missions.push(...got);
+    window.setTimeout(() => {
+      if (this.mode === 'play' && this.def.index === got[0].stratum) this.ui.toast(`New side missions · ${got.map((m) => m.title).join(' · ')}`);
+    }, 9000);
+  }
+
+  /** Count progress toward active side missions in this region. */
+  missionProgress(kind: 'pool' | 'harvest' | 'hunt' | 'contact', n: number, _x: number, _z: number, target = -1) {
+    for (const m of this.activeMissions()) {
+      if (m.state !== 'active' || m.kind !== kind) continue;
+      if ((kind === 'pool' || kind === 'hunt') && m.target !== target) continue;
+      m.have = Math.min(m.need, m.have + n);
+      if (m.have >= m.need) this.completeMission(m);
+    }
+  }
+
+  private completeMission(m: (typeof this.missions)[number]) {
+    m.state = 'done';
+    this.run.crystals = (this.run.crystals ?? 0) + m.reward;
+    this.gainXp(70 + this.def.index * 20);
+    this.audio.sfx('ready');
+    this.ui.toast(`Mission complete — ${m.title} · +${m.reward} Void Crystals`);
+    this.director.stimulate(this.player.x, this.player.z, this.world.radius, 1.2);
+    this.saveRun();
+  }
+
+  /** Datastream contacts: a column of rising glyph-light the hero must reach. */
+  private updateMissionSites(dt: number) {
+    const p = this.player;
+    for (const m of this.activeMissions()) {
+      if (m.kind !== 'contact' || m.state !== 'active') continue;
+      const d = Math.hypot(m.x - p.x, m.z - p.z);
+      if (d < 7) {
+        this.player.res = this.derived.maxRes;
+        this.missionProgress('contact', 1, m.x, m.z);
+        this.ui.say('The datastream folds into the Root-Blade. For a moment I can read the whole stratum.');
+        continue;
+      }
+      if (d > 160 || Math.random() > dt * 30) continue;
+      const y = this.world.terrain.heightAt(m.x, m.z);
+      const a = Math.random() * Math.PI * 2;
+      this.particles.emit(m.x + Math.cos(a) * 1.2, y + Math.random() * 2, m.z + Math.sin(a) * 1.2, 0, 6 + Math.random() * 4, 0, this.palette.accentHDR, 0.45, 2.6, 0.2, 0);
+    }
+  }
+
+  // ---------------------------------------------------------------- Act IV: the Veil of Void
+
+  private linkContact(node: MemoryNode) {
+    this.contactsLinked++;
+    const total = this.world.nodes.length;
+    const frag = this.def.fragments[Math.min(this.contactsLinked, this.def.fragments.length) - 1];
+    if (frag) this.ui.say(frag);
+    this.gainXp(140);
+    this.dropCrystals(node.pos.x, node.pos.z, 4);
+    this.player.hp = this.derived.maxHp;
+    this.player.res = Math.min(this.derived.maxRes, this.player.res + 50);
+    this.missionProgress('contact', 1, node.pos.x, node.pos.z);
+    this.ui.toast(`Resonance Contact linked · ${this.contactsLinked}/${total} · Core Resonator ${Math.round((this.contactsLinked / total) * 100)}%`);
+    if (this.contactsLinked >= total) this.wakeConstruct();
+    this.saveRun();
+  }
+
+  /** All Contacts linked: the Central Pylon answers, and the Construct steps out in front of it. */
+  private wakeConstruct() {
+    const g = this.world.gate;
+    const gx = g ? g.pos.x : 0;
+    const gz = g ? g.pos.z : 0;
+    const l = Math.hypot(gx, gz) || 1;
+    const x = gx - (gx / l) * 18;
+    const z = gz - (gz / l) * 18;
+    const e = this.spawnEnemy('boss', x, z, false, 'construct');
+    if (!e) return;
+    e.yawFace = Math.atan2(-gx, -gz);
+    e.group.rotation.y = e.yawFace;
+    e.aggroR = 60;
+    this.boss = e;
+    this.veil = { pylons: [], breach: 0, wave: 0 };
+    this.raisePylons(e, 3);
+    this.world.mycelium.connect({ x: this.player.x, z: this.player.z }, { x, z });
+    this.audio.sfx('boss');
+    this.shake(1);
+    this.ui.say(['Elder Gaia: "The Central Pylon is lit — and it is not alone."', 'Something vast unfolds from the datastream in front of the Pylon.']);
+  }
+
+  /** Raise `n` Integrated Data-River Pylons around the Construct; while any stands its shell is sealed. */
+  private raisePylons(boss: Enemy, n: number) {
+    const v = this.veil;
+    if (!v) return;
+    v.wave++;
+    v.breach = 0;
+    const off = this.director.random() * Math.PI * 2;
+    for (let i = 0; i < n; i++) {
+      const a = off + (i / n) * Math.PI * 2;
+      const r = 19 + (i % 2) * 5;
+      const e = this.spawnEnemy('pylon', boss.x + Math.cos(a) * r, boss.z + Math.sin(a) * r, false);
+      if (e) {
+        e.idle = false;
+        v.pylons.push(e);
+      }
+    }
+    boss.armored = true;
+  }
+
+  onPylonDestroyed(e: Enemy) {
+    const v = this.veil;
+    if (!v) return;
+    v.pylons = v.pylons.filter((p) => p !== e && !p.dead);
+    if (v.pylons.length === 0 && this.boss && !this.boss.dead) {
+      v.breach = 16;
+      this.boss.armored = false;
+      this.boss.state = 'stun';
+      this.boss.st = 2.2;
+      this.ui.toast('The data-rivers are cut — the Construct\'s core is exposed!');
+      this.audio.sfx('gate');
+      this.shake(0.9);
+    } else this.ui.toast(`Data-River Pylon destroyed · ${v.pylons.length} remain`);
+  }
+
+  private updateVeil(dt: number) {
+    const v = this.veil;
+    const b = this.boss;
+    if (!v || !b || b.dead) return;
+    // data-river beams: each pylon feeds a conduit socket on the Construct's back
+    const s = b.group.scale.x;
+    const sy = Math.sin(b.yawFace);
+    const cy = Math.cos(b.yawFace);
+    v.pylons.forEach((p, i) => {
+      if (p.dead) return;
+      if (!b.activated || p.spawnT < 1) {
+        if (p.beam) p.beam.visible = false;
+        return;
+      }
+      const lx = (i % 2 ? 0.95 : -0.95) * s;
+      const lz = -1.72 * s;
+      p.aimBeam(5.6, b.x + cy * lx + sy * lz, b.group.position.y + 6.15 * s, b.z - sy * lx + cy * lz, 3.2 + Math.sin(this.time * 9 + i) * 0.8);
+    });
+    if (v.breach > 0) {
+      v.breach -= dt;
+      if (v.breach <= 0) {
+        this.ui.toast('The Construct reseals its shell — new pylons rise');
+        this.raisePylons(b, Math.min(4, 1 + b.phase));
+      }
+    } else b.armored = v.pylons.some((p) => !p.dead);
+  }
+
+  private constructDefeated(e: Enemy) {
+    const pos = new THREE.Vector3(e.x, e.y + 3, e.z);
+    this.particles.burst(pos, new THREE.Color(0x38f2ff).multiplyScalar(3.5), 180, 30, 1.3, 1.9);
+    this.particles.ring(pos, new THREE.Color(0xd36bff).multiplyScalar(3), 100, 36, 1, 1.6);
+    this.audio.sfx('bossdie');
+    this.shake(1.8);
+    this.enemyTimeScale = 0.2;
+    this.projectiles.clearEnemyBolts();
+    this.veil = null;
+    for (const o of this.enemies) if (o !== e && !o.dead) this.combat.killEnemy(o);
+    this.pending = [];
+    this.ui.say(['The Construct kneels. The datastreams pour out of it and back into the ground where they belong.', this.def.gateText]);
+    const gate = this.world.gate;
+    if (gate) {
+      gate.group.visible = true;
+      gate.setOpen(true);
+      this.world.mycelium.connect({ x: e.x, z: e.z }, { x: gate.pos.x, z: gate.pos.z });
+    }
+    this.world.mycelium.seed(e.x, e.z, 24, 0, 100);
+    this.dropLoot(e.x, e.z, 'boss');
+    this.dropCrystals(e.x, e.z, 14);
+    this.gainXp(400);
+    this.audio.sfx('gate');
   }
 
   // ---------------------------------------------------------------- hooks used by combat/entities
@@ -1175,6 +1450,7 @@ export class Game {
     }
     const dmg = dmgIn * (1 - this.derived.dr);
     p.hp -= dmg;
+    this.lastHurtT = this.time;
     p.invuln = 0.6;
     p.hurtT = 0.6;
     this.stats.damageTaken += dmg;
@@ -1213,10 +1489,13 @@ export class Game {
     if (kind === 'heal') p.hp = Math.min(this.derived.maxHp, p.hp + 12);
     else if (kind === 'res') p.res = Math.min(this.derived.maxRes, p.res + 10);
     else if (kind === 'fiber') p.fiber = Math.min(MAX_FIBER, p.fiber + 12);
-    else if (item) this.acquireItem(item);
+    else if (kind === 'crystal') {
+      this.run.crystals = (this.run.crystals ?? 0) + 1;
+      this.missionProgress('harvest', 1, p.x, p.z);
+    } else if (item) this.acquireItem(item);
     if (kind !== 'gear') {
       this.audio.sfx('pickup', kind === 'heal' ? 1 : 1.3);
-      this.particles.burst(pos, kind === 'heal' ? new THREE.Color(0x7cff6b).multiplyScalar(2.5) : kind === 'fiber' ? new THREE.Color(0xc2ff7a).multiplyScalar(2.5) : new THREE.Color(0x4fb4ff).multiplyScalar(2.5), 6, 4, 0.35, 0.4);
+      this.particles.burst(pos, kind === 'heal' ? new THREE.Color(0x7cff6b).multiplyScalar(2.5) : kind === 'crystal' ? new THREE.Color(0xb46bff).multiplyScalar(3) : kind === 'fiber' ? new THREE.Color(0xc2ff7a).multiplyScalar(2.5) : new THREE.Color(0x4fb4ff).multiplyScalar(2.5), 6, 4, 0.35, 0.4);
     }
   }
 
@@ -1248,7 +1527,8 @@ export class Game {
       : source === 'pylon' ? { rare: 55, epic: 38, legendary: 7 }
       : source === 'embrace' ? { epic: 62, legendary: 38 }
       : { legendary: 1 };
-    const item = generateItem(Math.random, this.run.level + this.def.index, rollRarity(Math.random, weights));
+    const rnd = () => this.director.random();
+    const item = generateItem(rnd, this.run.level + this.def.index, rollRarity(rnd, weights));
     this.pickups.dropGear(x, z, item);
     if (source === 'boss') this.pickups.dropGear(x + 2, z, generateItem(Math.random, this.run.level + 4, 'legendary'));
   }
@@ -1398,14 +1678,27 @@ export class Game {
 
   bossAwake(e: Enemy) {
     this.boss = e;
+    if (e.variant === 'construct') {
+      this.ui.say(['Elder Gaia: "The Construct! Its shell drinks from the data-river pylons — break them and its core will open."', 'THE VOID-INFUSED CONSTRUCT · Destroy the Data-River Pylons']);
+      return;
+    }
     if (this.run.nullPoints >= NULL_ENDING_THRESHOLD) this.ui.say(LORE_BARKS.nullEmbraced);
     else this.ui.say(['…you came back.', 'I am the end of every sentence. Let me finish yours.']);
   }
-  bossPhase(_e: Enemy, phase: number) {
+  bossPhase(e: Enemy, phase: number) {
+    if (e.variant === 'construct') {
+      this.ui.say(phase === 2 ? 'The Construct tears new pylons out of the bedrock.' : 'Its crown burns white. The Construct stops guarding and starts hunting.');
+      if (this.veil) this.raisePylons(e, phase + 1);
+      return;
+    }
     this.ui.say(phase === 2 ? LORE_BARKS.nullPhase2 : LORE_BARKS.nullPhase3);
   }
   bossDefeated(e: Enemy) {
     this.bossDown = true;
+    if (e.variant === 'construct') {
+      this.constructDefeated(e);
+      return;
+    }
     const pos = new THREE.Vector3(e.x, e.y, e.z);
     this.particles.burst(pos, HOT.clone().multiplyScalar(3.5), 160, 28, 1.2, 1.8);
     this.particles.ring(pos, new THREE.Color(0xe8f4ff).multiplyScalar(3), 90, 34, 1, 1.6);
@@ -1497,7 +1790,7 @@ export class Game {
       if (d > 7 || Math.abs(n.pos.y + 1 - p.y) > 14) continue;
       if (this.def.id === 'return') consider(d, { kind: 'origin', ref: n, label: `<kbd>[${key}]</kbd> Carry the story home` });
       else if (!this.campCleared(n.index)) consider(d, { kind: 'locked', label: 'The Null guards this Remembrance' });
-      else consider(d, { kind: 'node', ref: n, label: `<kbd>[${key}]</kbd> Interact with ${this.def.nodeLabel}` });
+      else consider(d, { kind: 'node', ref: n, label: this.def.contacts ? `<kbd>[${key}]</kbd> Link ${this.def.nodeLabel}` : `<kbd>[${key}]</kbd> Interact with ${this.def.nodeLabel}` });
     }
     for (const py of this.world.pylons) {
       if (py.state !== 'dormant') continue;
@@ -1541,7 +1834,9 @@ export class Game {
 
   private startEncounter(anchor: MemoryNode | Pylon, kind: 'node' | 'pylon') {
     anchor.setState('active');
-    this.encounter = { enc: new Encounter(anchor as Anchor, kind, this.def.index, this.diff), anchor, kind };
+    const purgeMul = clamp(this.director.out.directives.pylonPurgeDifficulty / 1.27, 0.75, 1.35);
+    this.encounter = { enc: new Encounter(anchor as Anchor, kind, this.def.index, this.diff, purgeMul), anchor, kind };
+    this.director.stimulate(anchor.pos.x, anchor.pos.z, this.world.radius, 1.5);
     this.audio.sfx('node');
     this.shake(0.5);
     this.particles.ring(new THREE.Vector3(anchor.pos.x, anchor.pos.y + 1, anchor.pos.z), this.palette.accent2HDR, 50, 16, 0.6, 0.9);
@@ -1567,6 +1862,10 @@ export class Game {
     this.world.checkpoint.copy(py.pos).add(new THREE.Vector3(5, 0, 0));
     this.world.mycelium.connect({ x: this.world.startPos.x, z: this.world.startPos.z }, { x: py.pos.x, z: py.pos.z });
     this.dropLoot(py.pos.x + 4, py.pos.z, 'pylon');
+    this.dropCrystals(py.pos.x, py.pos.z, 5);
+    // the purge wave stuns every Fiend and Drone in range (blueprint: pylon purge stun)
+    purgeStun(this, py.pos.x, py.pos.z, 30);
+    this.director.stimulate(py.pos.x, py.pos.z, this.world.radius, 2);
     p.hp = this.derived.maxHp;
     p.res = this.derived.maxRes;
     this.gainXp(100);
@@ -1585,6 +1884,10 @@ export class Game {
     this.world.mycelium.connect(prev ? { x: prev.pos.x, z: prev.pos.z } : { x: this.world.startPos.x, z: this.world.startPos.z }, { x: node.pos.x, z: node.pos.z });
     this.world.mycelium.seed(node.pos.x, node.pos.z, 12, 0, 90);
     this.world.checkpoint.copy(node.pos).add(new THREE.Vector3(6, 0, 0));
+    if (this.def.contacts) {
+      this.linkContact(node);
+      return;
+    }
     const frag = this.def.fragments[node.index];
     if (frag) this.ui.say(frag);
     this.gainXp(120);
@@ -1612,6 +1915,8 @@ export class Game {
   private applyRemembrance(c: Remembrance, node: MemoryNode) {
     const p = this.player;
     this.run.remembrances.push(c);
+    if (c === 'purify') this.telemetry.purify++;
+    else this.telemetry.embrace++;
     const pos = new THREE.Vector3(node.pos.x, node.pos.y + 3, node.pos.z);
     if (c === 'purify') {
       this.run.purityPoints++;
@@ -1732,7 +2037,7 @@ export class Game {
   }
 
   objectivePoint(): { x: number; z: number } | null {
-    if (this.def.boss) return this.boss && !this.boss.dead ? { x: this.boss.x, z: this.boss.z } : this.bossDown && this.world.gate ? { x: this.world.gate.pos.x, z: this.world.gate.pos.z } : null;
+    if (this.def.boss || (this.def.contacts && this.boss)) return this.boss && !this.boss.dead ? this.veil && this.boss.armored ? this.nearestPylon() : { x: this.boss.x, z: this.boss.z } : this.bossDown && this.world.gate ? { x: this.world.gate.pos.x, z: this.world.gate.pos.z } : null;
     const n = this.nextNode();
     if (n) {
       const camp = this.camps.find((c) => c.spec.nodeIndex === n.index);
@@ -1740,6 +2045,13 @@ export class Game {
     }
     if (this.gateOpen() && this.world.gate) return { x: this.world.gate.pos.x, z: this.world.gate.pos.z };
     return null;
+  }
+
+  private nearestPylon() {
+    const p = this.player;
+    let best: Enemy | null = null;
+    for (const e of this.veil?.pylons ?? []) if (!e.dead && (!best || Math.hypot(e.x - p.x, e.z - p.z) < Math.hypot(best.x - p.x, best.z - p.z))) best = e;
+    return best ? { x: best.x, z: best.z } : this.boss ? { x: this.boss.x, z: this.boss.z } : null;
   }
 
   private markers(): MarkerSet {
@@ -1766,8 +2078,12 @@ export class Game {
     let target: string | null = null;
     if (this.def.boss) {
       objective = this.bossDown ? 'Enter the Threshold' : this.boss?.activated ? 'Answer the Null Warden' : 'Approach the Hollow Mirror';
+    } else if (this.def.contacts && (this.boss || this.bossDown)) {
+      const v = this.veil;
+      objective = this.bossDown ? 'Enter the Threshold' : !this.boss?.activated ? 'Reach the Central Pylon' : v && v.breach > 0 ? `Strike the exposed core (${Math.ceil(v.breach)}s)` : `Destroy the Data-River Pylons (${v ? v.pylons.filter((e) => !e.dead).length : 0} left)`;
+      target = this.bossDown ? null : 'The Void-Infused Construct';
     } else if (this.def.id !== 'return' && total > 0) {
-      if (done === total) objective = 'Enter the Threshold';
+      if (done === total) objective = this.def.contacts ? 'Reach the Central Pylon' : 'Enter the Threshold';
       else {
         objective = total > 1 ? `${this.def.objective} (${done}/${total})` : this.def.objective;
         const n = this.nextNode()!;
@@ -1805,6 +2121,9 @@ export class Game {
       target,
       progress,
       boss: this.boss && this.boss.activated && !this.boss.dead ? this.boss.hp / this.boss.maxHp : null,
+      bossName: this.boss ? enemyName(this.boss) : undefined,
+      crystals: this.run.crystals ?? 0,
+      missions: this.activeMissions().map((m) => ({ text: missionLine(m), done: m.state === 'done' })),
       prompt: t ? t.label : null,
       hint,
       aiming: p.aiming,
@@ -1847,6 +2166,18 @@ export class Game {
             delete this.run.equipped[slot];
             this.refreshDerived();
           }
+        },
+        infuse: (item) => {
+          const cost = infuseCost(item);
+          if ((this.run.crystals ?? 0) < cost) {
+            this.ui.toast(`Infusing needs ${cost} Void Crystals`);
+            return;
+          }
+          this.run.crystals = (this.run.crystals ?? 0) - cost;
+          infuse(item);
+          this.refreshDerived();
+          this.audio.sfx('choice');
+          this.ui.toast(`${item.name} infused · Lv ${item.level}`);
         },
         dismantle: (item) => {
           this.run.inventory = this.run.inventory.filter((i) => i.id !== item.id);
@@ -1903,7 +2234,7 @@ export class Game {
       return;
     }
     if (this.travelBusy) return;
-    if (this.enemies.some((e) => !e.dead && !e.idle && Math.hypot(e.x - this.player.x, e.z - this.player.z) < 45)) {
+    if (this.enemies.some((e) => !e.dead && !e.idle && e.kind !== 'pylon' && e.spawnT >= 1 && Math.hypot(e.x - this.player.x, e.z - this.player.z) < 32)) {
       this.ui.toast('Cannot travel while hunted');
       return;
     }
@@ -1942,7 +2273,7 @@ export class Game {
         }
         n.setState('dormant');
         this.completeNode(n);
-        this.ui.binaryKey(Math.random() < 0.5 ? 'purify' : 'embrace');
+        if (!this.def.contacts) this.ui.binaryKey(Math.random() < 0.5 ? 'purify' : 'embrace');
       }
     }
   }
@@ -1983,6 +2314,10 @@ export class Game {
       pos: [this.player.x, this.player.y, this.player.z],
       nullPoints: this.run.nullPoints,
       enemyNames: this.enemies.map((e) => ENEMY_NAME[e.kind]),
+      director: { phase: this.director.phase, threat: +this.director.out.threat.toFixed(2), extractions: this.director.pool.extractions, glow: +Number(floraGlow.value).toFixed(2) },
+      crystalsHeld: this.run.crystals ?? 0,
+      telemetry: this.telemetry,
+      veil: this.world.veil ? { tree: [this.world.veil.tree.x, this.world.veil.tree.z], pylons: this.veil?.pylons.filter((e) => !e.dead).length ?? null, breach: this.veil?.breach ?? null, armored: this.boss?.armored ?? null, boss: this.boss ? [this.boss.x, this.boss.z] : null } : null,
     };
   }
   /** Headless simulation: advance the game n ticks without rendering (used by the test bot). */

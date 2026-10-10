@@ -4,13 +4,13 @@ import { PERKS, composeStory, dominantEnding, emptyTiers } from '../src/story/st
 import type { RunState } from '../src/types';
 
 const baseRun = (over: Partial<RunState> = {}): RunState => ({
-  version: 2, cycle: 1, seed: 1, stratumIndex: 4, tiers: emptyTiers(), history: [], echoes: [],
+  version: 2, cycle: 1, seed: 1, stratumIndex: 5, tiers: emptyTiers(), history: [], echoes: [],
   maxHp: 100, deaths: 0, kills: 12, elapsed: 600, difficulty: 1, latent: [0, 0, 0, 0], level: 1, xp: 0, skillPoints: 0, skills: {}, inventory: [], equipped: {}, skin: 'resonant', nullPoints: 0, purityPoints: 0, remembrances: [], ...over,
 });
 
 describe('story data', () => {
   it('has five strata in order, with a choice on each of the first three', () => {
-    expect(STRATA.map((s) => s.id)).toEqual(['seedbed', 'river', 'canopy', 'mirror', 'return']);
+    expect(STRATA.map((s) => s.id)).toEqual(['seedbed', 'river', 'canopy', 'veil', 'mirror', 'return']);
     STRATA.forEach((s, i) => expect(s.index).toBe(i));
     expect(STRATA.slice(0, 3).every((s) => s.choice?.choices.length === 3)).toBe(true);
   });

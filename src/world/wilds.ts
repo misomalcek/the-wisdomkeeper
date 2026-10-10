@@ -13,7 +13,7 @@ import { interpret, CANOPY_TREE, FERN_BUSH, BLIGHT_TREE, type Species } from './
 import { vogel } from './gen/phyllotaxis';
 import { growHyphae } from './gen/hyphae';
 import { CHUNK } from './chunks';
-import { selfLit, standard, glow, worldTime, type N } from '../engine/materials';
+import { selfLit, standard, glow, worldTime, floraGlow, type N } from '../engine/materials';
 import { occlusionFade } from './occlusion';
 
 /** Chebyshev radius (in chunks) of the living Wilds around the hero. */
@@ -176,7 +176,7 @@ export class Wilds {
     const base: N = mix(mix(ca, cb, kind.min(1)), blightC, kind.sub(1).max(0));
     const vm = new LineBasicNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
     vm.colorNode = base.mul(pulse.mul(pulse).mul(0.7).add(0.25));
-    glow(vm, 0.9);
+    glow(vm, floraGlow.mul(0.9));
     this.veins = new THREE.LineSegments(g, vm);
     this.veins.frustumCulled = false;
     this.group.add(this.veins);

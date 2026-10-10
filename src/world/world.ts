@@ -17,12 +17,14 @@ import { DriftField, MushroomGroves, type TetherAnchor } from './traversal';
 import { Props } from './props';
 import { TerrainStreamer } from './chunks';
 import { Wilds } from './wilds';
+import { VeilSetPiece, layoutVeil, type VeilLayout } from './veil';
 
 /** How much traversal furniture each region gets. */
 const TRAVERSAL: Record<string, { mush: number; drift: number; crystals: number; pods: number }> = {
   seedbed: { mush: 2, drift: 1, crystals: 4, pods: 10 },
   river: { mush: 3, drift: 2, crystals: 4, pods: 14 },
   canopy: { mush: 5, drift: 3, crystals: 5, pods: 14 },
+  veil: { mush: 3, drift: 4, crystals: 6, pods: 12 },
   mirror: { mush: 1, drift: 3, crystals: 14, pods: 6 },
   return: { mush: 3, drift: 2, crystals: 3, pods: 10 },
 };
@@ -71,6 +73,8 @@ export class World {
   readonly mushrooms: MushroomGroves;
   readonly drift: DriftField;
   readonly props: Props;
+  /** Act IV: Elder Tree, mushroom bridges and datastreams. */
+  readonly veil: VeilSetPiece | null = null;
   readonly tetherAnchors: TetherAnchor[] = [];
   readonly nodes: MemoryNode[] = [];
   readonly pylons: Pylon[] = [];
@@ -224,7 +228,23 @@ export class World {
       if (p) podXZ.push(p);
     }
 
+    // Act IV: the Elder Tree stands between the Contacts, its bridges reaching each one and the Central Pylon
+    let veilLayout: VeilLayout | null = null;
+    if (def.contacts) {
+      let tp: THREE.Vector2 | null = null;
+      for (let tries = 0; tries < 60 && !tp; tries++) {
+        const c = at(rng.range(0.15, 0.55), rng.range(-0.12, 0.12));
+        if (dry(c) && clearOf(c, 24)) tp = c;
+      }
+      tp = tp ?? at(0.35, 0);
+      const targets = [...nodeXZ, gateXZ, ...pylonXZ.slice(0, 1)].map((p) => ({ x: p.x, z: p.y }));
+      veilLayout = layoutVeil(this.terrain, rng.fork('veil'), tp.x, tp.y, targets);
+      this.colliders.add(tp.x, tp.y, 5.4);
+      pois.push(tp);
+    }
+
     const avoid = [
+      ...(veilLayout ? [{ x: veilLayout.tree.x, z: veilLayout.tree.z, r: 16 }, ...veilLayout.caps.filter((c) => c.y - this.terrain.heightAt(c.x, c.z) < 6).map((c) => ({ x: c.x, z: c.z, r: c.r + 0.5 }))] : []),
       { x: startXZ.x, z: startXZ.y, r: 8 },
       { x: gateXZ.x, z: gateXZ.y, r: 10 },
       ...nodeXZ.map((p) => ({ x: p.x, z: p.y, r: 8 })),
@@ -237,7 +257,7 @@ export class World {
     this.group.add(this.flora.group);
 
     const vec = (l: THREE.Vector2[]) => l.map((p) => ({ x: p.x, z: p.y }));
-    this.mushrooms = new MushroomGroves(this.terrain, this.physics, rng.fork('mush'), this.palette, vec(mushXZ));
+    this.mushrooms = new MushroomGroves(this.terrain, this.physics, rng.fork('mush'), this.palette, vec(mushXZ), veilLayout?.caps ?? []);
     this.drift = new DriftField(this.terrain, this.physics, rng.fork('drift'), this.palette, vec(driftXZ));
     this.props = new Props(this.physics, this.terrain, rng.fork('props'), this.palette, vec(crystalXZ), vec(podXZ));
     this.group.add(this.mushrooms.group, this.drift.group, this.props.group);
@@ -270,10 +290,29 @@ export class World {
       this.colliders.add(p.x, p.y, 1.0);
     });
 
+    if (veilLayout) {
+      const cols: { x: number; z: number; y: number }[] = [];
+      const ring = (x: number, z: number, n: number, r: number) => {
+        for (let i = 0; i < n; i++) {
+          const a = (i / n) * TAU + i * 0.37;
+          const px = x + Math.cos(a) * r;
+          const pz = z + Math.sin(a) * r;
+          cols.push({ x: px, z: pz, y: this.terrain.heightAt(px, pz) });
+        }
+      };
+      ring(gateXZ.x, gateXZ.y, 6, 11);
+      for (const p of nodeXZ) ring(p.x, p.y, 2, 7);
+      ring(veilLayout.tree.x, veilLayout.tree.z, 4, 15);
+      const v = new VeilSetPiece(veilLayout, this.palette, rng.fork('veilfx'), cols);
+      (this as { veil: VeilSetPiece | null }).veil = v;
+      this.group.add(v.group);
+      this.tetherAnchors.push(...veilLayout.anchors);
+    }
+
     if (def.id !== 'return') {
       const center = new THREE.Vector3(0, 0, 0);
       this.gate = new FractalGate(this.palette, this.terrain, gateXZ.x, gateXZ.y, def.boss ? new THREE.Vector3(startXZ.x, 0, startXZ.y) : center);
-      this.gate.group.visible = !def.boss;
+      this.gate.group.visible = !def.boss && !def.contacts;
       this.group.add(this.gate.group);
       this.mycelium.addTarget(gateXZ.x, gateXZ.y);
     }
@@ -447,6 +486,7 @@ export class World {
     this.mushrooms.dispose();
     this.drift.dispose();
     this.props.dispose();
+    this.veil?.dispose();
     this.physics.dispose();
   }
 }

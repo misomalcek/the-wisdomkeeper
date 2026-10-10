@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { LineBasicNodeMaterial } from 'three/webgpu';
 import { uniform, attribute, smoothstep, exp, sin, mix, positionLocal } from 'three/tsl';
-import { glow, type N } from '../engine/materials';
+import { glow, floraGlow, type N } from '../engine/materials';
 import type { Rng } from '../util/rng';
 import type { Palette } from '../story/strata';
 import type { Terrain } from './terrain';
@@ -59,10 +59,59 @@ export class Mycelium {
     mat.colorNode = c.mul(reveal);
     mat.opacityNode = reveal;
     mat.maskNode = age.greaterThanEqual(0);
-    glow(mat, 0.9);
+    glow(mat, floraGlow.mul(0.9));
     this.lines = new THREE.LineSegments(this.geo, mat);
     this.lines.frustumCulled = false;
     this.lines.renderOrder = 2;
+  }
+
+  /**
+   * Conducted cords: every hypha grown by `connect` is also a levitation flow line (blueprint: mycelial cords are
+   * the conduits the hero rides). Segments are bucketed in an 8 m grid so lookups stay cheap for every enemy.
+   */
+  private cordGrid = new Map<number, number[]>();
+  private cordSeg: number[] = [];
+
+  private addCord(x0: number, z0: number, x1: number, z1: number) {
+    const i = this.cordSeg.length / 4;
+    this.cordSeg.push(x0, z0, x1, z1);
+    const cx = Math.floor((x0 + x1) / 16);
+    const cz = Math.floor((z0 + z1) / 16);
+    for (let a = cx - 1; a <= cx + 1; a++) {
+      for (let b = cz - 1; b <= cz + 1; b++) {
+        const k = (a + 4096) * 8192 + (b + 4096);
+        let l = this.cordGrid.get(k);
+        if (!l) this.cordGrid.set(k, (l = []));
+        l.push(i);
+      }
+    }
+  }
+
+  /** Strength (0..1) of the nearest conducted cord at (x, z); `out` receives its flow direction × strength. */
+  cordAt(x: number, z: number, out: { x: number; y: number }) {
+    out.x = out.y = 0;
+    const l = this.cordGrid.get((Math.floor(x / 8) + 4096) * 8192 + (Math.floor(z / 8) + 4096));
+    if (!l) return 0;
+    let best = 3.2 * 3.2;
+    let hit = -1;
+    const s = this.cordSeg;
+    for (const i of l) {
+      const ax = s[i * 4], az = s[i * 4 + 1], bx = s[i * 4 + 2], bz = s[i * 4 + 3];
+      const dx = bx - ax, dz = bz - az;
+      const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz || 1)));
+      const d = (ax + dx * t - x) ** 2 + (az + dz * t - z) ** 2;
+      if (d < best) {
+        best = d;
+        hit = i;
+      }
+    }
+    if (hit < 0) return 0;
+    const k = 1 - Math.sqrt(best) / 3.2;
+    const dx = s[hit * 4 + 2] - s[hit * 4], dz = s[hit * 4 + 3] - s[hit * 4 + 1];
+    const len = Math.hypot(dx, dz) || 1;
+    out.x = (dx / len) * k;
+    out.y = (dz / len) * k;
+    return k;
   }
 
   addTarget(x: number, z: number) {
@@ -103,6 +152,8 @@ export class Mycelium {
     const amp = Math.min(3.5, len * 0.12);
     let px = a.x;
     let pz = a.z;
+    let cx = a.x;
+    let cz = a.z;
     const kind = this.rng.range(0.2, 0.8);
     for (let i = 1; i <= steps; i++) {
       const t = i / steps;
@@ -110,6 +161,11 @@ export class Mycelium {
       const x = a.x + dx * t + nx * w;
       const z = a.z + dz * t + nz * w;
       this.addSeg(px, pz, x, z, this.now + i * 0.018, kind);
+      if (i % 4 === 0 || i === steps) {
+        this.addCord(cx, cz, x, z);
+        cx = x;
+        cz = z;
+      }
       if (i % 9 === 0) this.seed(x, z, 1, 2, 14);
       px = x;
       pz = z;
