@@ -11,7 +11,8 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "noEmit": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "paths": { "three": ["./node_modules/@types/three/src/Three.WebGPU.d.ts"] }
   },
   "include": ["src", "tests", "vite.config.ts"]
 }

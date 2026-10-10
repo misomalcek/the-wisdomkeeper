@@ -1,5 +1,8 @@
 import './style.css';
 import { Game } from './game';
+import { initPhysics } from './physics/physics';
+import { Gfx } from './engine/gfx';
+import { preloadAssets } from './assets/pipeline';
 
 declare global {
   interface Window {
@@ -7,10 +10,13 @@ declare global {
   }
 }
 
-function boot() {
+async function boot() {
   const root = document.getElementById('game-root')!;
   try {
-    const game = new Game(root);
+    // Rapier's WASM is inlined in the bundle; compiling it takes a moment while the title fades in.
+    const [gfx] = await Promise.all([Gfx.create(root), initPhysics()]);
+    await preloadAssets(gfx.renderer);
+    const game = new Game(gfx);
     game.start();
     if (/[?#&]debug/.test(location.search + location.hash)) window.__wk = game;
   } catch (err) {
@@ -20,4 +26,4 @@ function boot() {
   }
 }
 
-boot();
+void boot();

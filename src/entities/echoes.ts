@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { glowBasic, standard } from '../engine/materials';
 import type { Affinity } from '../types';
 import type { Terrain } from '../world/terrain';
 import { clamp, easeOutBack } from '../util/math';
@@ -36,10 +37,10 @@ export class EchoGrove {
   constructor(private terrain: Terrain) {
     this.trunk = new THREE.InstancedMesh(
       new THREE.ConeGeometry(0.3, 1, 7).translate(0, 0.5, 0),
-      occlusionFade(new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6, metalness: 0.1 })),
+      occlusionFade(standard({ color: 0xffffff, roughness: 0.6, metalness: 0.1 })),
       MAX,
     );
-    this.crown = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), occlusionFade(new THREE.MeshBasicMaterial()), MAX);
+    this.crown = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), occlusionFade(glowBasic()), MAX);
     for (const m of [this.trunk, this.crown]) {
       m.count = 0;
       m.frustumCulled = false;

@@ -1,9 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { initPhysics } from '../src/physics/physics';
 import { STRATA } from '../src/story/strata';
 import { World } from '../src/world/world';
 import { emptyTiers } from '../src/story/story';
 import type { RunState } from '../src/types';
 import { Rng } from '../src/util/rng';
+
+beforeAll(async () => {
+  await initPhysics();
+});
 
 const mkRun = (seed: number, latent: number[]): RunState => ({
   version: 2, cycle: 1, seed, stratumIndex: 0, tiers: emptyTiers(), history: [], echoes: [],
@@ -43,12 +48,35 @@ describe('world generation invariants', () => {
 
   it('the Return regrows every echo from the run history', () => {
     const run = mkRun(5, [0, 0, 0, 0]);
-    run.stratumIndex = 4;
+    run.stratumIndex = 5;
     run.echoes = Array.from({ length: 40 }, (_, i) => ({ x: Math.cos(i) * 20, z: Math.sin(i) * 20, affinity: (['root', 'echo', 'flow'] as const)[i % 3], stratum: 'river' as const, radius: 54 }));
-    const w = new World(STRATA[4], run);
+    const w = new World(STRATA[5], run);
     expect(w.grove.echoes.length).toBeGreaterThanOrEqual(36);
     expect(w.grove.echoes.every((e) => e.grown)).toBe(true);
     w.dispose();
+  });
+
+  it('the Veil of Void grows a climbable Elder Tree with walkable mushroom bridges', async () => {
+    const { layoutVeil } = await import('../src/world/veil');
+    const veil = STRATA.find((s) => s.id === 'veil')!;
+    for (const seed of [3, 41, 977]) {
+      const w = new World(veil, mkRun(seed, [0, 0, 0, 0]));
+      expect(w.veil).not.toBeNull();
+      expect(w.gate!.group.visible).toBe(false);
+      const targets = w.nodes.map((n) => ({ x: n.pos.x, z: n.pos.z }));
+      const L = layoutVeil(w.terrain, new Rng(seed), 0, 0, targets);
+      expect(L.caps.length).toBeGreaterThan(15);
+      for (const chain of L.bridges) {
+        for (let i = 1; i < chain.length; i++) {
+          const a = chain[i - 1];
+          const b = chain[i];
+          // every hop between bridge caps is a jump the hero can make
+          expect(Math.hypot(b.x - a.x, b.z - a.z)).toBeLessThan(4.6);
+          expect(b.y - a.y).toBeLessThan(2.2);
+        }
+      }
+      w.dispose();
+    }
   });
 
   it('is deterministic for the same seed', () => {

@@ -23,7 +23,7 @@ const res = await page.evaluate(({ skill, maxMin }) => {
     if (g.run.skillPoints > 0 && t % 30 === 0) { const ids = ['deep_root','spore_mastery','resonant_memory','echo_strike','tidal_step','current_rider','verdant_mend']; for (const id of ids) { import_rank(g, id); } }
     const idx = g.run.stratumIndex;
     if (g.mode !== 'transition' && idx !== lastIdx) {
-      report.push({ stratum: ['seedbed','river','canopy','mirror','return'][lastIdx], clearSec: +(simT - t0).toFixed(0), deaths: g.run.deaths - deathsSeen, dmg: Math.round(lastDmg), kills: g.run.history.at(-1)?.kills, lvl: g.run.level, null: g.run.nullPoints, items: g.run.inventory.length, bot: { ...window.__bot.stats } });
+      report.push({ stratum: ['seedbed','river','canopy','veil','mirror','return'][lastIdx], clearSec: +(simT - t0).toFixed(0), deaths: g.run.deaths - deathsSeen, dmg: Math.round(lastDmg), kills: g.run.history.at(-1)?.kills, lvl: g.run.level, null: g.run.nullPoints, items: g.run.inventory.length, bot: { ...window.__bot.stats } });
       lastIdx = idx; t0 = simT; lastDmg = 0;
     }
     if (t % (30 * 30) === 0 && t > 0 && g.mode === 'play' && simT - t0 > 600) { report.push({ stuckAt: g.debugState() }); break; }

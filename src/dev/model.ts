@@ -1,0 +1,45 @@
+// Dev-only: GLB inspection turntable. ?src=<url under public>&yaw=<rad>&y=<look height>&d=<distance>
+import * as THREE from 'three';
+import { WebGPURenderer, PMREMGenerator } from 'three/webgpu';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const qs = new URLSearchParams(location.search);
+const renderer = new WebGPURenderer({ antialias: true });
+await renderer.init();
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b1a22);
+const pm = new PMREMGenerator(renderer);
+scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture;
+const sun = new THREE.DirectionalLight(0xffffff, 2);
+sun.position.set(2, 4, 3);
+scene.add(sun);
+const loader = new GLTFLoader();
+loader.setMeshoptDecoder(MeshoptDecoder);
+const gltf = await loader.loadAsync(qs.get('src') ?? '/raw/hero-tripo.glb');
+const root = gltf.scene;
+const box = new THREE.Box3().setFromObject(root);
+const size = box.getSize(new THREE.Vector3());
+const s = 2.05 / size.y;
+root.scale.setScalar(s);
+root.position.set(-(box.min.x + box.max.x) * 0.5 * s, -box.min.y * s, -(box.min.z + box.max.z) * 0.5 * s);
+const pivot = new THREE.Group();
+pivot.add(root);
+pivot.rotation.y = Number(qs.get('yaw') ?? 0);
+scene.add(pivot);
+const cam = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.05, 50);
+const d = Number(qs.get('d') ?? 4.2);
+const y = Number(qs.get('y') ?? 1.05);
+cam.position.set(0, y + 0.15, d);
+cam.lookAt(0, y, 0);
+let tris = 0;
+root.traverse((o) => {
+  const m = o as THREE.Mesh;
+  if (m.isMesh) tris += (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3;
+});
+renderer.setAnimationLoop(() => renderer.render(scene, cam));
+(window as unknown as { info: unknown }).info = { size: size.toArray(), tris };

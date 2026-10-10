@@ -81,6 +81,8 @@ export function setupTouch(input: Input, onFirstTouch: () => void) {
   tap('t-r', 'KeyR');
   tap('t-use', 'KeyE');
   tap('t-fly', 'KeyV');
+  tap('t-tether', 'KeyT');
+  tap('t-mode', 'KeyX');
   tap('t-inv', 'Tab');
   tap('t-pause', 'Escape');
 

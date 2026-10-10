@@ -5,7 +5,8 @@ import { fmtTime } from '../util/math';
 import {
   RARITY, SKILLS, SKINS, SLOTS, SLOT_LABEL, STAT_LABEL, canRank, fmtStat, skinUnlocked, type Derived,
 } from '../systems/progress';
-import { renderPortrait } from './portrait';
+import { cachedPortrait, fillPortraits } from './portrait';
+import { infuseCost } from '../systems/missions';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -27,6 +28,10 @@ export interface HudState {
   target: string | null;
   progress: { label: string; v: number } | null;
   boss: number | null;
+  /** Display name over the boss bar. */
+  bossName?: string;
+  crystals?: number;
+  missions?: { text: string; done: boolean }[];
   prompt: string | null;
   hint: string | null;
   aiming: boolean;
@@ -57,6 +62,7 @@ export interface InvHandlers {
   equip(item: Item): void;
   unequip(slot: Slot): void;
   dismantle(item: Item): void;
+  infuse(item: Item): void;
   rank(id: string): void;
   skin(s: Skin): void;
 }
@@ -71,6 +77,7 @@ export class UI {
   private sayQueue: string[] = [];
   private sayBusy = false;
   private sayTimers: number[] = [];
+  private bossName = '';
   private lastHud = '';
   private mini = $<HTMLCanvasElement>('minimap').getContext('2d')!;
   private comp = $<HTMLCanvasElement>('compass').getContext('2d')!;
@@ -127,7 +134,7 @@ export class UI {
     this.reticle.classList.toggle('enemy', s.onEnemy);
     const key = JSON.stringify([
       Math.round(s.hp), s.maxHp, Math.round(s.shield), s.shieldMax, Math.round(s.res), s.maxRes, s.level, Math.round(s.xp), s.xpNext,
-      Object.values(s.abil).map((v) => Math.round(v * 40)), Object.values(s.afford), s.tiers, s.act, s.objective, s.target,
+      Object.values(s.abil).map((v) => Math.round(v * 40)), Object.values(s.afford), s.tiers, s.act, s.objective, s.target, s.crystals, s.missions?.map((m) => m.text + m.done).join('|'),
       s.progress && Math.round(s.progress.v * 200), s.progress?.label, s.boss !== null ? Math.round(s.boss * 300) : null, s.prompt, s.hint, s.lockNeeded,
     ]);
     if (s.flying !== (this.lastKeyHints === 'fly')) this.setKeyHints(s.flying);
@@ -157,6 +164,8 @@ export class UI {
       .join('');
     $('act-name').textContent = s.act;
     $('objective').textContent = s.objective;
+    $('crystals').textContent = `◆ ${s.crystals ?? 0}`;
+    $('missions').innerHTML = (s.missions ?? []).map((m) => `<div class="${m.done ? 'done' : ''}">${m.text}</div>`).join('');
     const tg = $('target');
     tg.textContent = s.target ? `Current Target: ${s.target}` : '';
     tg.style.display = s.target ? 'block' : 'none';
@@ -167,6 +176,10 @@ export class UI {
       $('prog-text').textContent = s.progress.label;
     }
     $('boss-bar').classList.toggle('hidden', s.boss === null);
+    if (s.bossName && this.bossName !== s.bossName) {
+      this.bossName = s.bossName;
+      ($('boss-bar').querySelector('.boss-name') as HTMLElement).textContent = s.bossName.toUpperCase();
+    }
     if (s.boss !== null) $('boss-fill').style.transform = `scaleX(${Math.max(0, s.boss)})`;
     const prompt = $('prompt');
     prompt.classList.toggle('hidden', !s.prompt);
@@ -644,16 +657,24 @@ export class UI {
       const pack = run.inventory
         .map((it) => `<button class="cell ${inv.sel?.id === it.id ? 'sel' : ''}" data-id="${it.id}" style="--rc:${RARITY[it.rarity].color}" title="${it.name}">${SLOT_ICON[it.slot]}</button>`)
         .join('');
+      const infuseWorn = SLOTS.filter((sl) => run.equipped[sl])
+        .map((sl) => {
+          const it = run.equipped[sl]!;
+          const c = infuseCost(it);
+          return `<button class="infbtn ${(run.crystals ?? 0) >= c ? '' : 'poor'}" data-inf="${sl}">Infuse ${SLOT_LABEL[sl]} · ◆${c}</button>`;
+        })
+        .join('');
       const sel = inv.sel && run.inventory.find((i) => i.id === inv.sel!.id);
       const eq = sel ? run.equipped[sel.slot] : undefined;
       const detail = sel
-        ? `<h4 style="--rc:${RARITY[sel.rarity].color}">${sel.name}</h4><div style="color:var(--dim);font-size:11px;margin-bottom:6px">${RARITY[sel.rarity].name} ${SLOT_LABEL[sel.slot]} · Lv ${sel.level}</div>${this.itemStatsHtml(sel, eq)}<div class="acts"><button data-act="equip" class="primary">Equip</button><button data-act="dismantle">Dismantle (+XP)</button></div>`
+        ? `<h4 style="--rc:${RARITY[sel.rarity].color}">${sel.name}</h4><div style="color:var(--dim);font-size:11px;margin-bottom:6px">${RARITY[sel.rarity].name} ${SLOT_LABEL[sel.slot]} · Lv ${sel.level}</div>${this.itemStatsHtml(sel, eq)}<div class="acts"><button data-act="equip" class="primary">Equip</button><button data-act="infuse">Infuse ◆${infuseCost(sel)}</button><button data-act="dismantle">Dismantle (+XP)</button></div>`
         : `<div style="color:var(--dim)">Select a piece of gear from your pack to compare it with what you wear. Rare gear drops from Void-Root Fiends, Spore Caches and Pylon purges — and from Embracing the Null.</div>`;
       body.innerHTML = `<div class="inv-grid">
-        <div class="slotlist">${slots}</div>
-        <div class="portrait"><img alt="Wisdomkeeper" src="${renderPortrait(run.skin)}"></div>
+        <div class="slotlist">${slots}<div class="eyebrow" style="margin:10px 0 6px">Void Crystals · ◆ ${run.crystals ?? 0}</div>${infuseWorn}</div>
+        <div class="portrait">${cachedPortrait(run.skin) ? `<img alt="Wisdomkeeper" src="${cachedPortrait(run.skin)}">` : `<img alt="Wisdomkeeper" data-portrait="${run.skin}">`}</div>
         <div><div class="eyebrow" style="margin-bottom:8px">Backpack · ${run.inventory.length}</div><div class="pack">${pack || '<span class="empty">Nothing yet.</span>'}</div><div class="detail">${detail}</div></div>
       </div>`;
+      fillPortraits(body);
       body.querySelectorAll<HTMLElement>('.slotbtn').forEach((b) => {
         b.onclick = () => {
           const it = run.equipped[b.dataset.slot as Slot];
@@ -661,6 +682,13 @@ export class UI {
             h.unequip(b.dataset.slot as Slot);
             this.renderInv();
           }
+        };
+      });
+      body.querySelectorAll<HTMLElement>('.infbtn').forEach((b) => {
+        b.onclick = () => {
+          const it = run.equipped[b.dataset.inf as Slot];
+          if (it) h.infuse(it);
+          this.renderInv();
         };
       });
       body.querySelectorAll<HTMLElement>('.cell').forEach((b) => {
@@ -672,6 +700,11 @@ export class UI {
       body.querySelectorAll<HTMLElement>('[data-act]').forEach((b) => {
         b.onclick = () => {
           if (!sel) return;
+          if (b.dataset.act === 'infuse') {
+            h.infuse(sel);
+            this.renderInv();
+            return;
+          }
           if (b.dataset.act === 'equip') h.equip(sel);
           else h.dismantle(sel);
           inv.sel = undefined;
@@ -725,10 +758,11 @@ export class UI {
       const cards = (['resonant', 'verdant', 'void'] as Skin[])
         .map((sk) => {
           const ok = skinUnlocked(run, sk);
-          return `<button class="skin ${run.skin === sk ? 'on' : ''} ${ok ? '' : 'locked'}" data-skin="${sk}"><img alt="${sk}" src="${renderPortrait(sk, 220, 320)}"><b>${SKINS[sk].name}</b><small>${SKINS[sk].blurb}</small><small>${ok ? (run.skin === sk ? 'EQUIPPED' : 'Click to wear') : `LOCKED — ${SKINS[sk].unlock}`}</small></button>`;
+          return `<button class="skin ${run.skin === sk ? 'on' : ''} ${ok ? '' : 'locked'}" data-skin="${sk}"><img alt="${sk}" ${cachedPortrait(sk, 220, 320) ? `src="${cachedPortrait(sk, 220, 320)}"` : `data-portrait="${sk}" data-w="220" data-h="320"`}><b>${SKINS[sk].name}</b><small>${SKINS[sk].blurb}</small><small>${ok ? (run.skin === sk ? 'EQUIPPED' : 'Click to wear') : `LOCKED — ${SKINS[sk].unlock}`}</small></button>`;
         })
         .join('');
       body.innerHTML = `<div class="skins">${cards}</div>`;
+      fillPortraits(body);
       body.querySelectorAll<HTMLElement>('.skin').forEach((b) => {
         b.onclick = () => {
           const sk = b.dataset.skin as Skin;

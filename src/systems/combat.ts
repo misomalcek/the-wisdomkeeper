@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Game } from '../game';
 import type { Enemy } from '../entities/enemies';
-import { enemyXp } from '../entities/enemies';
+import { enemyXp, WEAK_POINT_MUL, SPIKE_ARMOUR_MUL } from '../entities/enemies';
 import type { Player } from '../entities/player';
 import { BOLT_COLORS, type Bolt } from '../entities/projectiles';
 import { AbilityFx } from '../entities/abilities';
@@ -9,6 +9,8 @@ import { AFFINITY_COLOR } from '../entities/echoes';
 import { angleDiff, clamp } from '../util/math';
 
 const HOT = new THREE.Color(0xff3b7a);
+const ROCK = new THREE.Color(0x30343c);
+const VOIDBARK = new THREE.Color(0x2a1830);
 const _v = new THREE.Vector3();
 const _p = new THREE.Vector3();
 
@@ -40,6 +42,7 @@ export class Combat {
   cd = { spike: 0, shield: 0, surge: 0 };
   shieldT = 0;
   shieldMax = 70;
+  private armourHintT = 0;
   private ghosts: Ghost[] = [];
   private jobs: SpikeJob[] = [];
 
@@ -100,6 +103,9 @@ export class Combat {
     const half = idx === 2 ? Math.PI : tiers.echo >= 2 ? 1.2 : 0.95;
     const dmg = (idx === 2 ? 46 : 26) * D.dmgMul;
     this.strike(p.x, p.y, p.z, this.swingYaw, reach, half, dmg, idx === 2, false);
+    const sx = Math.sin(this.swingYaw);
+    const sz = Math.cos(this.swingYaw);
+    g.strikeProps(p.x + sx * reach * 0.55, p.y + 0.9, p.z + sz * reach * 0.55, reach * (half > 2 ? 1 : 0.6), dmg, idx === 2 ? 12 : 7, sx, sz);
     const col = this.affinityColor();
     this.fx.swing(p.x, p.y + 0.9, p.z, this.swingYaw, reach * 0.95, half, col);
     this.sweepParticles(p.x, p.y + 1, p.z, this.swingYaw, reach, half, col);
@@ -131,7 +137,18 @@ export class Combat {
       if (half < Math.PI && Math.abs(angleDiff(yaw, Math.atan2(dx, dz))) > half + Math.atan2(e.radius, Math.max(d, 0.5))) continue;
       if (Math.abs(e.y - (y + 1)) > e.radius + 2.6) continue;
       const slow = g.run.tiers.root >= 1 ? 0.45 + D.slowBonus : 0;
-      this.damageEnemy(e, dmg, dx, dz, { slow, echo, knock: slam ? 14 : 6 });
+      // a Fiend that has just lunged, swept or been stunned leaves its core open to the blade
+      let mult = 1;
+      let crit = false;
+      if (e.kind === 'brute') {
+        const front = Math.abs(angleDiff(e.yawFace, Math.atan2(x - e.x, z - e.z))) < 0.9;
+        if (front && (e.state === 'recover' || e.state === 'stun' || e.state === 'sweep')) {
+          mult = WEAK_POINT_MUL;
+          crit = true;
+        } else if (!front && Math.abs(angleDiff(e.yawFace, Math.atan2(x - e.x, z - e.z))) > 2.2) mult = this.spikeArmour(e);
+      }
+      e.lastMelee = true;
+      this.damageEnemy(e, dmg * mult, dx, dz, { slow, echo, knock: slam ? 14 : 6, crit });
       hits++;
     }
     if (hits && !echo) {
@@ -165,30 +182,54 @@ export class Combat {
     let mult = 1;
     let crit = false;
     if (e.kind === 'brute' || e.kind === 'boss') {
-      // weak point: the mycelial core, struck from the front
+      // weak point: the mycelial core, struck from the front (blueprint Chest_Core_Bone ×2.5)
       e.coreWorld(_v);
       const dx = b.x - _v.x;
       const dy = b.y - _v.y;
       const dz = b.z - _v.z;
-      const coreR = (e.kind === 'boss' ? 0.5 : 0.7) * e.scale;
-      const f = Math.sin(e.yawFace) * b.vx + Math.cos(e.yawFace) * b.vz;
+      const coreR = e.kind === 'boss' ? (e.variant === 'construct' ? 1.6 : 0.5 * e.scale) : 0.75 * e.scale;
+      const sp = Math.hypot(b.vx, b.vz) || 1;
+      const f = (Math.sin(e.yawFace) * b.vx + Math.cos(e.yawFace) * b.vz) / sp;
       if (dx * dx + dy * dy + dz * dz < coreR * coreR && f < 0) {
-        mult = 1.7;
+        mult = WEAK_POINT_MUL;
         crit = true;
-      }
+      } else if (e.kind === 'brute' && f > 0.4) mult = this.spikeArmour(e);
     }
+    e.lastMelee = false;
     this.damageEnemy(e, b.dmg * mult, b.vx, b.vz, { slow: b.slow, echo: b.echo, crit, knock: 2 });
     if (!b.echo) this.gainRes(0.6);
   }
 
   // ---------------------------------------------------------------- damage & death
 
-  damageEnemy(e: Enemy, dmgIn: number, dirx: number, dirz: number, o: { slow?: number; echo?: boolean; crit?: boolean; knock?: number }) {
+  /** Warped bone-spike armour on a Fiend's back: hits from behind glance off. */
+  private spikeArmour(e: Enemy) {
+    this.g.particles.burst(_v.set(e.x, e.y + 0.5, e.z), new THREE.Color(0xd8d0ff).multiplyScalar(2), 5, 6, 0.25, 0.3);
+    return SPIKE_ARMOUR_MUL;
+  }
+
+  damageEnemy(e: Enemy, dmgIn: number, dirx: number, dirz: number, o: { slow?: number; echo?: boolean; crit?: boolean; knock?: number; ability?: boolean }) {
     const g = this.g;
     if (e.dead) return;
     if (e.invuln > 0) {
       e.flash = 0.04;
       return;
+    }
+    if (e.armored) {
+      // the Construct's shell holds while its data-river pylons feed it
+      e.flash = 0.04;
+      g.particles.burst(_v.set(e.x, e.y + 1, e.z), new THREE.Color(0x00e1ff).multiplyScalar(2.5), 6, 7, 0.3, 0.35);
+      if (g.time > this.armourHintT) {
+        this.armourHintT = g.time + 6;
+        g.ui.toast('Armoured — destroy the Data-River Pylons');
+      }
+      return;
+    }
+    if (e.kind === 'drone' && o.ability) {
+      // core overload: abilities short the Core Power Resonator
+      dmgIn *= 2;
+      e.state = 'stun';
+      e.st = 1.4;
     }
     e.wake(g);
     const dmg = dmgIn * this.D.voidMul;
@@ -229,12 +270,36 @@ export class Combat {
     g.particles.ring(pos, new THREE.Color(0x5cffc1).multiplyScalar(2), 14, 8, 0.4, 0.6);
     g.audio.sfx('kill', e.kind === 'brute' ? 0.6 : 1);
     g.shake(e.kind === 'brute' ? 0.5 : 0.1);
+    if (e.kind === 'brute' || e.kind === 'boss') {
+      g.world.props.debris.burst('rubble', e.x, e.y + 1, e.z, e.kind === 'boss' ? 26 : 12, 8, VOIDBARK, e.kind === 'boss' ? 2.2 : 1.4);
+      g.world.props.debris.burst('shard', e.x, e.y + 1.5, e.z, 8, 9, HOT, 1.2);
+    }
     g.gainXp(enemyXp(e.kind));
     g.onEnemyKilled(e);
     if (e.kind === 'boss') {
       g.bossDefeated(e);
       return;
     }
+    if (e.lastMelee) g.telemetry.meleeKills++;
+    g.director.stimulate(e.x, e.z, g.world.radius, e.kind === 'brute' ? 1.8 : 1.1);
+    if (e.kind === 'pylon') {
+      g.particles.ring(pos, new THREE.Color(0x00e1ff).multiplyScalar(3), 50, 18, 0.8, 0.9);
+      g.world.props.debris.burst('shard', e.x, e.y, e.z, 16, 10, new THREE.Color(0x00e1ff), 1.4);
+      g.shake(0.6);
+      g.dropCrystals(e.x, e.z, 3);
+      g.onPylonDestroyed(e);
+      return;
+    }
+    if (e.kind === 'drone') {
+      // the resonator bursts: nearby Null take the blast
+      g.particles.ring(pos, new THREE.Color(0xff2a44).multiplyScalar(3), 30, 12, 0.5, 0.6);
+      for (const o of g.enemies) {
+        if (o === e || o.dead || o.kind === 'boss' || o.kind === 'pylon') continue;
+        if ((o.x - e.x) ** 2 + (o.z - e.z) ** 2 + (o.y - e.y) ** 2 < 4.5 * 4.5) this.damageEnemy(o, 40 * this.D.dmgMul, o.x - e.x, o.z - e.z, { knock: 10, crit: true });
+      }
+      if (Math.random() < 0.6) g.dropCrystals(e.x, e.z, 1);
+    }
+    if (e.kind === 'brute') g.dropCrystals(e.x, e.z, 2);
     const roll = Math.random();
     if (e.kind === 'brute') {
       g.pickups.drop(e.x, e.z, 'heal');
@@ -286,6 +351,8 @@ export class Combat {
     const g = this.g;
     if (this.cd.spike > 0 || p.res < COST.spike) return this.denied(this.cd.spike > 0 ? 'Root Spike recharging' : 'Not enough Resonance');
     p.res -= COST.spike;
+    g.telemetry.resonanceSpent += COST.spike;
+    g.director.stimulate(p.x, p.z, g.world.radius, 1.4);
     this.cd.spike = CD.spike;
     const D = this.D;
     const yaw = g.cam.yaw;
@@ -309,6 +376,8 @@ export class Combat {
     const g = this.g;
     if (this.cd.shield > 0 || p.res < COST.shield) return this.denied(this.cd.shield > 0 ? 'Fractal Shield recharging' : 'Not enough Resonance');
     p.res -= COST.shield;
+    g.telemetry.resonanceSpent += COST.shield;
+    g.director.stimulate(p.x, p.z, g.world.radius, 1.4);
     this.cd.shield = CD.shield;
     this.shieldMax = this.D.shieldCap;
     p.shield = this.shieldMax;
@@ -343,6 +412,8 @@ export class Combat {
     const g = this.g;
     if (this.cd.surge > 0 || p.res < COST.surge) return this.denied(this.cd.surge > 0 ? 'Surge recharging' : 'Not enough Resonance');
     p.res -= COST.surge;
+    g.telemetry.resonanceSpent += COST.surge;
+    g.director.stimulate(p.x, p.z, g.world.radius, 1.4);
     this.cd.surge = CD.surge;
     const D = this.D;
     const tiers = g.run.tiers;
@@ -360,7 +431,7 @@ export class Combat {
       const dx = e.x - p.x;
       const dz = e.z - p.z;
       if (dx * dx + dz * dz < (radius + e.radius) ** 2) {
-        this.damageEnemy(e, (e.kind === 'boss' ? 90 : 60) * D.power * D.dmgMul, dx, dz, { knock: 16 });
+        this.damageEnemy(e, (e.kind === 'boss' ? 90 : 60) * D.power * D.dmgMul, dx, dz, { knock: 16, ability: true });
         if (tiers.flow >= 2 || D.chrono) {
           e.slowT = 4;
           e.slowF = 0.35;
@@ -368,6 +439,7 @@ export class Combat {
       }
     }
     g.projectiles.clearEnemyBolts();
+    g.strikeProps(p.x, p.y + 1, p.z, radius * 0.7, 25, 14);
     g.world.mycelium.seed(p.x, p.z, 14, 0, 70);
     if (tiers.root >= 3) {
       for (let i = 0; i < 3; i++) {
@@ -422,12 +494,14 @@ export class Combat {
       if (j.t > 0) continue;
       this.jobs.splice(i, 1);
       g.particles.burst(_v.set(j.x, g.world.terrain.heightAt(j.x, j.z) + 0.3, j.z), new THREE.Color(0x9bff6b).multiplyScalar(2.2), 8, 6, 0.4, 0.5);
+      g.strikeProps(j.x, g.world.terrain.heightAt(j.x, j.z) + 0.5, j.z, 1.8, j.dmg, 11);
+      if (Math.random() < 0.5) g.world.props.debris.burst('rubble', j.x, g.world.terrain.heightAt(j.x, j.z) + 0.2, j.z, 2, 6, ROCK);
       for (const e of g.enemies) {
         if (e.dead) continue;
         const dx = e.x - j.x;
         const dz = e.z - j.z;
         if (dx * dx + dz * dz < (2.5 + e.radius) ** 2 && e.y - e.foot < g.world.terrain.heightAt(j.x, j.z) + 5) {
-          this.damageEnemy(e, j.dmg, dx, dz, { knock: 3 });
+          this.damageEnemy(e, j.dmg, dx, dz, { knock: 3, ability: true });
           if (!e.dead && e.kind !== 'boss') e.rootT = j.root;
         }
       }

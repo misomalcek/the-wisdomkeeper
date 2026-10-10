@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { MeshBasicNodeMaterial } from 'three/webgpu';
+import { glowBasic, standard, selfLit, floraGlow } from '../engine/materials';
+import type { NodeMaterial } from 'three/webgpu';
 import type { Rng } from '../util/rng';
 import type { StratumDef } from '../story/strata';
 import type { Terrain } from './terrain';
@@ -22,24 +25,14 @@ const _o = new THREE.Object3D();
 const _q = new THREE.Quaternion();
 const UP = new THREE.Vector3(0, 1, 0);
 
-/** Lit PBR surface that also glows in its own instance colour (emissive = albedo * k). */
-function selfLit(k: number, extra: THREE.MeshStandardMaterialParameters = {}) {
-  const m = new THREE.MeshStandardMaterial({ roughness: 0.55, metalness: 0, ...extra });
-  m.onBeforeCompile = (sh) => {
-    sh.fragmentShader = sh.fragmentShader.replace(
-      '#include <emissivemap_fragment>',
-      `#include <emissivemap_fragment>\n totalEmissiveRadiance = diffuseColor.rgb * ${k.toFixed(2)};`,
-    );
-  };
-  return m;
-}
-
 class Batch {
   readonly mesh: THREE.InstancedMesh;
   private n = 0;
   constructor(geo: THREE.BufferGeometry, mat: THREE.Material, max: number) {
     this.mesh = new THREE.InstancedMesh(geo, mat, max);
     this.mesh.frustumCulled = false;
+    this.mesh.castShadow = true;
+    this.mesh.receiveShadow = true;
     this.mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(max * 3), 3);
   }
   add(pos: THREE.Vector3, rotY: number, scale: THREE.Vector3 | number, color: THREE.Color, quat?: THREE.Quaternion) {
@@ -68,7 +61,7 @@ export function buildFlora(def: StratumDef, terrain: Terrain, rng: Rng, density:
   const batches: Batch[] = [];
   const disposables: { dispose(): void }[] = [];
   const track = <T extends { dispose(): void }>(d: T) => (disposables.push(d), d);
-  const mk = (geo: THREE.BufferGeometry, mat: THREE.Material, max: number) => {
+  const mk = (geo: THREE.BufferGeometry, mat: NodeMaterial, max: number) => {
     track(geo);
     track(occlusionFade(mat));
     const b = new Batch(geo, mat, max);
@@ -100,7 +93,7 @@ export function buildFlora(def: StratumDef, terrain: Terrain, rng: Rng, density:
   if (mushroomCount) {
     const stem = mk(
       new THREE.CylinderGeometry(0.12, 0.2, 1, 6).translate(0, 0.5, 0),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8, metalness: 0 }),
+      standard({ color: 0xffffff, roughness: 0.8, metalness: 0 }),
       mushroomCount,
     );
     const capGeo = new THREE.SphereGeometry(1, 12, 7, 0, TAU, 0, Math.PI / 2);
@@ -124,10 +117,10 @@ export function buildFlora(def: StratumDef, terrain: Terrain, rng: Rng, density:
   if (sproutCount) {
     const wire = mk(
       new THREE.CylinderGeometry(0.025, 0.05, 1, 4).translate(0, 0.5, 0),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.1, roughness: 0.6 }),
+      standard({ color: 0xffffff, metalness: 0.1, roughness: 0.6 }),
       sproutCount,
     );
-    const tip = mk(new THREE.OctahedronGeometry(0.16, 0), new THREE.MeshBasicMaterial(), sproutCount);
+    const tip = mk(new THREE.OctahedronGeometry(0.16, 0), glowBasic({}, floraGlow), sproutCount);
     for (let i = 0; i < sproutCount; i++) {
       const p = spot(2, R * 1.02, 0.3);
       if (!p) continue;
@@ -145,10 +138,10 @@ export function buildFlora(def: StratumDef, terrain: Terrain, rng: Rng, density:
   if (monoCount) {
     const body = mk(
       new THREE.BoxGeometry(1.1, 1, 0.45).translate(0, 0.5, 0),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.2, roughness: 0.55, flatShading: true }),
+      standard({ color: 0xffffff, metalness: 0.2, roughness: 0.55, flatShading: true }),
       monoCount,
     );
-    const seam = mk(new THREE.BoxGeometry(0.1, 1, 0.5).translate(0, 0.5, 0), new THREE.MeshBasicMaterial(), monoCount);
+    const seam = mk(new THREE.BoxGeometry(0.1, 1, 0.5).translate(0, 0.5, 0), glowBasic({}, floraGlow), monoCount);
     for (let i = 0; i < monoCount; i++) {
       const p = spot(6, R * 0.98, 0.1);
       if (!p) continue;
@@ -169,7 +162,7 @@ export function buildFlora(def: StratumDef, terrain: Terrain, rng: Rng, density:
   if (reedCount) {
     const reed = mk(
       new THREE.ConeGeometry(0.07, 1, 4).translate(0, 0.5, 0),
-      new THREE.MeshStandardMaterial({ roughness: 0.6 }),
+      standard({ roughness: 0.6 }),
       reedCount,
     );
     for (let i = 0; i < reedCount; i++) {
@@ -193,7 +186,7 @@ export function buildFlora(def: StratumDef, terrain: Terrain, rng: Rng, density:
     const lilyN = n(80);
     const lily = mk(
       new THREE.CircleGeometry(1, 14).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }),
+      glowBasic({ side: THREE.DoubleSide }, floraGlow),
       lilyN,
     );
     for (let i = 0; i < lilyN; i++) {
@@ -220,11 +213,11 @@ export function buildFlora(def: StratumDef, terrain: Terrain, rng: Rng, density:
 
   // ---- fractal trees (canopy) + blackened Null-grove trees around enemy camps --------------------
   const UPv = UP;
-  const branchesLive = def.flora === 'canopy' ? mk(new THREE.CylinderGeometry(0.62, 1, 1, 5).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0.05 }), Math.round(16 * density * (R / 62) * (R / 62) * 0.7) * 170 + 400) : null;
-  const tipsLive = def.flora === 'canopy' ? mk(new THREE.IcosahedronGeometry(0.3, 0), new THREE.MeshBasicMaterial(), Math.round(16 * density * (R / 62) * (R / 62) * 0.7) * 90 + 200) : null;
+  const branchesLive = def.flora === 'canopy' ? mk(new THREE.CylinderGeometry(0.62, 1, 1, 5).translate(0, 0.5, 0), standard({ roughness: 0.6, metalness: 0.05 }), Math.round(16 * density * (R / 62) * (R / 62) * 0.7) * 170 + 400) : null;
+  const tipsLive = def.flora === 'canopy' ? mk(new THREE.IcosahedronGeometry(0.3, 0), glowBasic({}, floraGlow), Math.round(16 * density * (R / 62) * (R / 62) * 0.7) * 90 + 200) : null;
   const deadN = groves.length * 8;
-  const branchesDead = deadN ? mk(new THREE.CylinderGeometry(0.55, 1, 1, 5).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ roughness: 0.8, metalness: 0.05 }), deadN * 90) : null;
-  const tipsDead = deadN ? mk(new THREE.OctahedronGeometry(0.22, 0), new THREE.MeshBasicMaterial(), deadN * 50) : null;
+  const branchesDead = deadN ? mk(new THREE.CylinderGeometry(0.55, 1, 1, 5).translate(0, 0.5, 0), standard({ roughness: 0.8, metalness: 0.05 }), deadN * 90) : null;
+  const tipsDead = deadN ? mk(new THREE.OctahedronGeometry(0.22, 0), glowBasic({}, floraGlow), deadN * 50) : null;
 
   const growTree = (
     base: THREE.Vector3, dir: THREE.Vector3, len: number, rad: number, depth: number, maxDepth: number,
@@ -274,10 +267,11 @@ export function buildFlora(def: StratumDef, terrain: Terrain, rng: Rng, density:
         const x = gv.x + Math.cos(a) * r;
         const z = gv.z + Math.sin(a) * r;
         if (terrain.riverAt(x, z) > 0.2 || Math.hypot(x, z) > R * 0.97) continue;
+        if (avoid.some((v) => v.r >= 12 && (v.x - x) ** 2 + (v.z - z) ** 2 < v.r * v.r)) continue; // set-piece clearings
         const p = new THREE.Vector3(x, terrain.heightAt(x, z), z);
         const len = rng.range(3.5, 6.5);
         const lean = new THREE.Vector3(rng.range(-0.25, 0.25), 1, rng.range(-0.25, 0.25)).normalize();
-        growTree(p, lean, len, 0.4 + len * 0.04, 4, 4, branchesDead, tipsDead, trunkCol, budCol, [0xff3b7a, 0xff7a3b], [1.1, 1.8], 1.25);
+        growTree(p, lean, len, 0.4 + len * 0.04, 4, 4, branchesDead, tipsDead, trunkCol, budCol, [0xff3b7a, 0xff7a3b], [0.55, 0.95], 1.25);
         colliders.add(x, z, 0.65);
       }
     }
@@ -292,7 +286,7 @@ export function buildFlora(def: StratumDef, terrain: Terrain, rng: Rng, density:
     const floatN = 70;
     const geo = track(new THREE.OctahedronGeometry(1, 0));
     const mat = track(
-      new THREE.MeshStandardMaterial({ color: 0xbfd6ff, metalness: 1, roughness: 0.12, flatShading: true, emissive: 0x223355, emissiveIntensity: 0.9 }),
+      standard({ color: 0xbfd6ff, metalness: 1, roughness: 0.12, flatShading: true, emissive: 0x223355, emissiveIntensity: 0.9 }),
     );
     shardMesh = new THREE.InstancedMesh(geo, mat, ringN + floatN);
     shardMesh.frustumCulled = false;
@@ -319,7 +313,7 @@ export function buildFlora(def: StratumDef, terrain: Terrain, rng: Rng, density:
   }
 
   batches.forEach((b) => b.done());
-  const matUpdate = batches.map((b) => b.mesh.material).filter((m): m is THREE.MeshBasicMaterial => m instanceof THREE.MeshBasicMaterial);
+  const matUpdate = batches.map((b) => b.mesh.material).filter((m): m is MeshBasicNodeMaterial => m instanceof MeshBasicNodeMaterial);
 
   return {
     group,

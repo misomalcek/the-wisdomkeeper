@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { MeshBasicNodeMaterial } from 'three/webgpu';
+import { glowBasic, standard, glow, type N } from '../engine/materials';
+import { uniform, pow, float, abs, dot, normalView, positionView, positionLocal, sin, smoothstep, mix, vec3 } from 'three/tsl';
 
 const _o = new THREE.Object3D();
 
@@ -17,13 +20,14 @@ export class AbilityFx {
   private spikeMesh: THREE.InstancedMesh;
   private spikes: Spike[] = [];
   private shieldGroup = new THREE.Group();
-  private shieldMat: THREE.ShaderMaterial;
+  private shieldMat: MeshBasicNodeMaterial;
+  private shieldU: { t: N; a: N; flash: N; col: N } = { t: uniform(0), a: uniform(0), flash: uniform(0), col: uniform(new THREE.Color(0x4fd8ff)) };
   private shieldWire: THREE.Mesh;
   private want = false;
   private shieldOn = 0; // 0..1
   private shieldFlash = 0;
   private arc: THREE.Mesh;
-  private arcMat: THREE.MeshBasicMaterial;
+  private arcMat: MeshBasicNodeMaterial;
   private arcT = 1;
   private surge: THREE.Mesh;
   private surgeT = 99;
@@ -34,49 +38,43 @@ export class AbilityFx {
     const col = new THREE.Color(0x9bff6b).multiplyScalar(1.6);
     this.spikeMesh = new THREE.InstancedMesh(
       new THREE.ConeGeometry(0.55, 3.2, 6).translate(0, 1.6, 0),
-      new THREE.MeshStandardMaterial({ color: 0x2a4a2a, emissive: col, emissiveIntensity: 0.9, roughness: 0.5, flatShading: true }),
+      standard({ color: 0x2a4a2a, emissive: col, emissiveIntensity: 0.9, roughness: 0.5, flatShading: true }),
       64,
     );
     this.spikeMesh.count = 0;
     this.spikeMesh.frustumCulled = false;
     this.group.add(this.spikeMesh);
 
-    this.shieldMat = new THREE.ShaderMaterial({
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      side: THREE.DoubleSide,
-      uniforms: { uT: { value: 0 }, uA: { value: 0 }, uFlash: { value: 0 }, uCol: { value: new THREE.Color(0x4fd8ff) } },
-      vertexShader: /* glsl */ `varying vec3 vN; varying vec3 vP; varying vec3 vV; void main(){ vP = position; vN = normalize(normalMatrix * normal); vec4 mv = modelViewMatrix * vec4(position,1.0); vV = normalize(-mv.xyz); gl_Position = projectionMatrix * mv; }`,
-      fragmentShader: /* glsl */ `
-        uniform float uT, uA, uFlash; uniform vec3 uCol; varying vec3 vN; varying vec3 vP; varying vec3 vV;
-        void main(){
-          float fres = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 2.2);
-          vec3 p = normalize(vP);
-          float hex = abs(sin(p.x * 14.0 + uT * 0.6) * sin(p.y * 14.0 - uT * 0.5) * sin(p.z * 14.0 + uT * 0.4));
-          float lines = smoothstep(0.82, 0.98, hex);
-          float a = (fres * 0.85 + lines * 0.55 + 0.05) * uA;
-          vec3 c = mix(uCol, vec3(1.0), uFlash) * (1.0 + uFlash * 2.0);
-          gl_FragColor = vec4(c * a * 1.6, a);
-        }`,
-    });
+    {
+      const u = this.shieldU;
+      const fres = pow(float(1).sub(abs(dot(normalView, positionView.normalize().negate()))), 2.2);
+      const p: N = positionLocal.normalize();
+      const hex = abs(sin(p.x.mul(14).add(u.t.mul(0.6))).mul(sin(p.y.mul(14).sub(u.t.mul(0.5)))).mul(sin(p.z.mul(14).add(u.t.mul(0.4)))));
+      const lines = smoothstep(0.82, 0.98, hex);
+      const al = fres.mul(0.85).add(lines.mul(0.55)).add(0.05).mul(u.a);
+      const c = mix(u.col, vec3(1), u.flash).mul(u.flash.mul(2).add(1));
+      const m = new MeshBasicNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+      m.colorNode = c.mul(al).mul(1.6);
+      m.opacityNode = al;
+      this.shieldMat = glow(m);
+    }
     const shell = new THREE.Mesh(new THREE.IcosahedronGeometry(1.75, 3), this.shieldMat);
     this.shieldWire = new THREE.Mesh(
       new THREE.IcosahedronGeometry(1.45, 1),
-      new THREE.MeshBasicMaterial({ color: new THREE.Color(0x9fefff).multiplyScalar(1.6), wireframe: true, transparent: true, opacity: 0.35, depthWrite: false, blending: THREE.AdditiveBlending }),
+      glowBasic({ color: new THREE.Color(0x9fefff).multiplyScalar(1.6), wireframe: true, transparent: true, opacity: 0.35, depthWrite: false, blending: THREE.AdditiveBlending }),
     );
     this.shieldGroup.add(shell, this.shieldWire);
     this.shieldGroup.visible = false;
     this.group.add(this.shieldGroup);
 
-    this.arcMat = new THREE.MeshBasicMaterial({ color: 0x9bffd8, transparent: true, opacity: 0, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false });
+    this.arcMat = glowBasic({ color: 0x9bffd8, transparent: true, opacity: 0, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false });
     this.arc = new THREE.Mesh(new THREE.RingGeometry(0.55, 1, 28, 1, -0.95, 1.9).rotateX(-Math.PI / 2), this.arcMat);
     this.arc.visible = false;
     this.group.add(this.arc);
 
     this.surge = new THREE.Mesh(
       new THREE.RingGeometry(0.92, 1, 72).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ color: new THREE.Color(0xb084ff).multiplyScalar(3), transparent: true, opacity: 0, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }),
+      glowBasic({ color: new THREE.Color(0xb084ff).multiplyScalar(3), transparent: true, opacity: 0, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }),
     );
     this.group.add(this.surge);
   }
@@ -94,7 +92,7 @@ export class AbilityFx {
     this.shieldFlash = 1;
   }
   setShieldColor(c: THREE.ColorRepresentation) {
-    this.shieldMat.uniforms.uCol.value.set(c);
+    this.shieldU.col.value.set(c);
   }
 
   /** Sweep arc in front of the hero (sx: reach, yaw faces +z) */
@@ -147,10 +145,10 @@ export class AbilityFx {
     if (this.shieldGroup.visible) {
       this.shieldGroup.position.set(playerPos.x, playerPos.y + 1.0, playerPos.z);
       this.shieldFlash = Math.max(0, this.shieldFlash - dt * 4);
-      const u = this.shieldMat.uniforms;
-      u.uT.value = this.time;
-      u.uA.value = this.shieldOn * (0.45 + 0.55 * Math.min(1, shieldHp / Math.max(shieldMax, 1)));
-      u.uFlash.value = this.shieldFlash;
+      const u = this.shieldU;
+      u.t.value = this.time;
+      u.a.value = this.shieldOn * (0.45 + 0.55 * Math.min(1, shieldHp / Math.max(shieldMax, 1)));
+      u.flash.value = this.shieldFlash;
       this.shieldGroup.rotation.y += dt * 0.6;
       this.shieldWire.rotation.set(this.time * 0.9, -this.time * 0.7, 0);
       this.shieldGroup.scale.setScalar(0.9 + this.shieldOn * 0.1 + this.shieldFlash * 0.06);
@@ -166,7 +164,7 @@ export class AbilityFx {
     // surge
     this.surgeT += dt;
     const k = Math.min(1, this.surgeT / 0.55);
-    const mat = this.surge.material as THREE.MeshBasicMaterial;
+    const mat = this.surge.material as MeshBasicNodeMaterial;
     mat.opacity = k >= 1 ? 0 : (1 - k) * 0.9;
     this.surge.scale.setScalar(Math.max(0.01, k * this.surgeR * 1.05));
   }

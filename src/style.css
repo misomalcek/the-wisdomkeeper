@@ -76,6 +76,9 @@ input[type='range'] { accent-color: var(--accent); width: 60%; }
 .bar.res > span { background: repeating-linear-gradient(115deg, #2a6cff 0 10px, #4fb4ff 10px 20px); background-size: 40px 100%; animation: wave 1.6s linear infinite; }
 @keyframes wave { to { background-position: 40px 0; } }
 .bar.res.ready { border-color: #bfe6ff; box-shadow: 0 0 14px rgba(79, 180, 255, 0.6); }
+.bar.fiber { height: 7px; }
+.bar.fiber > span { background: linear-gradient(90deg, #4f8a2a, #c2ff7a); box-shadow: 0 0 8px rgba(194, 255, 122, 0.6); }
+.fiberlabel { font-size: 10px; margin-top: 3px; }
 .bar.prog > span { background: linear-gradient(90deg, #ff3b7a, #ffb86b); }
 .bar.boss { height: 14px; } .bar.boss > span { background: linear-gradient(90deg, #7a1038, #ff3b7a); }
 .xpbar { height: 3px; margin-top: 5px; background: rgba(255, 255, 255, 0.08); }
@@ -89,6 +92,11 @@ input[type='range'] { accent-color: var(--accent); width: 60%; }
 #act-name { font-size: 11px; letter-spacing: 0.2em; color: #8fe8cf; }
 #objective { margin-top: 3px; font-size: 16px; font-weight: 600; letter-spacing: 0.06em; color: #f1fffa; text-shadow: 0 0 12px rgba(92, 255, 193, 0.4); }
 #target { font-size: 12px; letter-spacing: 0.1em; color: #7cffc0; margin-top: 2px; text-transform: none; }
+.infbtn { display: block; width: 100%; margin-top: 4px; padding: 5px 8px; font-size: 11px; text-align: left; color: #e4ccff; background: rgba(120, 60, 200, 0.18); border: 1px solid rgba(180, 107, 255, 0.45); border-radius: 4px; cursor: pointer; }
+.infbtn.poor { opacity: 0.45; }
+#missions { margin-top: 8px; font-size: 11px; letter-spacing: 0.06em; color: #a9d8ff; line-height: 1.55; }
+#missions .done { color: #6f8f8a; text-decoration: line-through; }
+#crystals { margin-top: 6px; font-size: 12px; font-weight: 700; color: #c9a0ff; letter-spacing: 0.12em; text-shadow: 0 0 8px rgba(180, 107, 255, 0.7); }
 #objective-panel .prog { margin-top: 8px; height: 12px; margin-left: auto; width: 240px; }
 #reticle { position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
 #reticle i { position: absolute; left: -3px; top: -3px; width: 6px; height: 6px; border-radius: 50%; background: rgba(220, 255, 245, 0.9); box-shadow: 0 0 8px rgba(92, 255, 193, 0.8); transition: all 0.1s; }
@@ -254,6 +262,7 @@ table.keys td { padding: 7px 4px; border-bottom: 1px solid rgba(124,255,214,0.12
 #t-aim { right: 124px; bottom: 34px; } #t-jump { right: 28px; bottom: 124px; } #t-dash { right: 108px; bottom: 100px; }
 #t-q { right: 190px; bottom: 28px; } #t-f { right: 178px; bottom: 90px; } #t-r { right: 100px; bottom: 164px; }
 #t-use { right: 28px; bottom: 192px; } #t-fly { right: 192px; bottom: 154px; }
+#t-tether { right: 272px; bottom: 40px; } #t-mode { right: 266px; bottom: 112px; }
 #t-inv { right: 14px; top: 14px; } #t-pause { right: 60px; top: 14px; }
 
 @media (pointer: coarse) {
@@ -298,3 +307,23 @@ body.ov #hud { opacity: 0.18; transition: opacity 0.2s; }
   .inv-grid { min-height: 0; } .pack { max-height: 150px; } .detail { min-height: 70px; }
   .skilltree { gap: 10px; } .sk { min-height: 48px; padding: 4px 8px; } .sk small { font-size: 10px; }
 }
+
+/* ---------- traversal: mode chip, tether marker, mode wheel ---------- */
+#mode-chip { position: absolute; left: 22px; bottom: 106px; font-size: 11px; letter-spacing: 0.22em; padding: 4px 10px; color: #bfffe9; background: rgba(4, 18, 17, 0.75); border-left: 2px solid var(--accent); clip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%); }
+#mode-chip kbd { color: var(--gold); border-color: rgba(255, 193, 74, 0.5); }
+#mode-chip.flight { border-color: #ff9a4a; } #mode-chip.levitate { border-color: #b084ff; } #mode-chip.tether { border-color: #c2ff7a; }
+#tether-mark { position: absolute; width: 0; height: 0; }
+#tether-mark i { position: absolute; left: -13px; top: -13px; width: 26px; height: 26px; border: 2px solid #c2ff7a; transform: rotate(45deg); box-shadow: 0 0 12px rgba(194, 255, 122, 0.8); animation: tpulse 1s ease-in-out infinite; }
+#tether-mark span { position: absolute; left: 18px; top: -7px; font-size: 11px; letter-spacing: 0.16em; color: #e6ffd0; white-space: nowrap; text-shadow: 0 1px 4px #000; }
+@keyframes tpulse { 50% { transform: rotate(45deg) scale(0.8); opacity: 0.7; } }
+#mode-wheel { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 20; text-align: center; pointer-events: none; }
+.wheel-title, .wheel-hint { font-size: 12px; letter-spacing: 0.3em; color: #bfffe9; text-shadow: 0 1px 6px #000; }
+.wheel-hint { margin-top: 10px; font-size: 10px; text-transform: none; letter-spacing: 0.14em; }
+.wheel { position: relative; width: 300px; height: 300px; margin-top: 8px; border-radius: 50%; background: radial-gradient(circle, rgba(4, 24, 24, 0.55) 0 30%, rgba(4, 24, 24, 0.85) 31% 70%, rgba(4, 24, 24, 0.0) 71%); box-shadow: 0 0 0 1px rgba(124, 255, 214, 0.35) inset; }
+.wheel .sector { position: absolute; left: 50%; top: 50%; width: 92px; height: 92px; margin: -46px; transform: rotate(var(--a)) translateY(-104px) rotate(calc(-1 * var(--a))); color: #8fe8cf; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 50%; transition: all 0.12s; }
+.wheel .sector svg { width: 40px; height: 40px; }
+.wheel .sector span { font-size: 12px; letter-spacing: 0.16em; margin-top: 4px; }
+.wheel .sector.sel { color: #fff; background: radial-gradient(circle, rgba(92, 255, 193, 0.35), rgba(92, 255, 193, 0) 70%); filter: drop-shadow(0 0 10px rgba(92, 255, 193, 0.9)); }
+.wheel .sector.off { opacity: 0.35; }
+.wheel .hub { position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; margin: -32px; color: var(--accent); border-radius: 50%; border: 1px solid rgba(124, 255, 214, 0.5); display: flex; align-items: center; justify-content: center; }
+.wheel .hub svg { width: 36px; height: 36px; }

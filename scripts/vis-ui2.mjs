@@ -21,7 +21,7 @@ await wait(2500);
 await shot('u-river');
 console.log('river mode', JSON.stringify(await page.evaluate(() => window.__wk.debugState().playerMode)));
 // boss arena
-await page.evaluate(() => { const g = window.__wk; g.debugGoto(3); g.god = true; });
+await page.evaluate(() => { const g = window.__wk; g.debugGoto(4); g.god = true; });
 await wait(2500); await hide();
 await page.evaluate(() => { const g = window.__wk; g.debugAt(0, 28); g.cam.yaw = Math.PI; g.cam.pitch = 0.12; g.debugStep(120); });
 await wait(2500);

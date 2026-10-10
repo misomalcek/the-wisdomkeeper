@@ -42,10 +42,10 @@ const fresh = async (stratum = 0) => {
     p.res = 100;
     g.input.press('Space'); g.debugStep(8); out.jumped = p.y - t.heightAt(p.x, p.z) > 0.3;
     g.debugStep(60);
-    g.input.press('KeyV'); g.debugStep(2); out.flight = p.mode;
+    g.input.press('KeyV'); g.debugStep(2); out.flight = p.mode; const fuel0 = p.fuel;
     g.cam.pitch = -0.25; g.input.touchMove.set(0, -1); const y0 = p.y; g.debugStep(60); out.climbed = p.y - y0;
     g.input.touchMove.set(0, 0);
-    out.drain = 100 - p.res;
+    out.drain = fuel0 - p.fuel;
     g.input.press('KeyV'); g.debugStep(60); out.after = p.mode;
     g.debugStep(200);
     out.landed = p.mode === 'ground';
@@ -60,7 +60,7 @@ const fresh = async (stratum = 0) => {
   check('jump leaves the ground', r.jumped);
   check('V ignites free flight', r.flight === 'flight', r.flight);
   check('flight follows the camera pitch (climbs)', r.climbed > 3, `climbed=${r.climbed.toFixed(1)}`);
-  check('flight drains Resonance', r.drain > 3, `drain=${r.drain.toFixed(1)}`);
+  check('flight burns fuel (fiber, then Resonance)', r.drain > 3, `drain=${r.drain.toFixed(1)}`);
   check('V again drops out of flight', r.after !== 'flight', r.after);
   check('hero lands back on the ground', r.landed);
   check('the river of light levitates the hero', r.river === 'levitate' && r.hover > 0.8, `${r.river} h=${r.hover.toFixed(2)}`);
@@ -213,7 +213,9 @@ for (const aff of ['root', 'echo', 'flow']) {
     window.__farIdx = w.pylons.indexOf(far);
     return out;
   });
-  await page.waitForTimeout(900);
+  // the travel lands on a timer; under software GL a single frame can take longer than that, so wait for it
+  await page.waitForFunction(() => !window.__wk.travelBusy, null, { timeout: 8000 }).catch(() => {});
+  await page.waitForTimeout(200);
   const after = await page.evaluate(() => { const g = window.__wk, p = g.player, py = g.world.pylons[window.__farIdx]; return Math.hypot(p.x - py.pos.x, p.z - py.pos.z); });
   check('Spore Cache opens', r.cache);
   check('Pylon starts a purge event', r.active);
@@ -253,9 +255,69 @@ for (const aff of ['root', 'echo', 'flow']) {
   await close();
 }
 
+// ---- 9b. Act IV: Resonance Contacts wake the Construct; its pylons armour it; the breach exposes the core
+{
+  const { page, logs, close } = await fresh(3);
+  const r = await page.evaluate(() => {
+    const g = window.__wk, out = {};
+    out.stratum = g.def.id;
+    out.gateHidden = !g.world.gate.group.visible;
+    out.missions = (g.run.missions || []).filter((m) => m.stratum === 3).length;
+    g.god = true;
+    g.debugCompleteNodes();
+    const b = g.enemies.find((e) => e.kind === 'boss');
+    out.construct = !!b && b.variant === 'construct';
+    g.debugAt(b.x + 20, b.z); g.debugStep(90);
+    out.awake = b.activated;
+    out.armored = b.armored;
+    const hp0 = b.hp; b.invuln = 0;
+    g.combat.damageEnemy(b, 500, 1, 0, {});
+    out.deflected = b.hp === hp0;
+    for (const p of g.enemies.filter((e) => e.kind === 'pylon')) g.combat.damageEnemy(p, 99999, 1, 0, {});
+    g.debugStep(3);
+    out.breach = !b.armored;
+    b.invuln = 0;
+    g.combat.damageEnemy(b, 500, 1, 0, {});
+    out.hurt = b.hp < hp0;
+    g.debugKillBoss(); g.debugStep(10);
+    out.gateOpen = g.world.gate.group.visible && g.world.gate.wantOpen;
+    out.crystals = g.run.crystals;
+    return out;
+  });
+  check('Act IV is the Veil of Void with its gate sealed', r.stratum === 'veil' && r.gateHidden, JSON.stringify(r));
+  check('the Director offers side missions', r.missions > 0, `missions=${r.missions}`);
+  check('linking every Contact wakes the Void-Infused Construct', r.construct && r.awake);
+  check('data-river pylons armour the Construct', r.armored && r.deflected);
+  check('destroying the pylons breaches its shell', r.breach && r.hurt);
+  check('defeating it opens the Threshold', r.gateOpen && r.crystals > 0, `crystals=${r.crystals}`);
+  check('Act IV: no console errors', logs.length === 0, logs.join(' | '));
+  await close();
+}
+
+// ---- 9c. Null-Sentry Drone: ability overload stuns it and doubles the damage
+{
+  const { page, logs, close } = await fresh(2);
+  const r = await page.evaluate(() => {
+    const g = window.__wk, p = g.player;
+    g.spawnEnemy('drone', p.x + 12, p.z, false);
+    const d = g.enemies.find((e) => e.kind === 'drone');
+    g.debugStep(40);
+    d.invuln = 0;
+    const h0 = d.hp;
+    g.combat.damageEnemy(d, 10, 1, 0, {});
+    const plain = h0 - d.hp;
+    const h1 = d.hp;
+    g.combat.damageEnemy(d, 10, 1, 0, { ability: true });
+    return { plain, overload: h1 - d.hp, state: d.state };
+  });
+  check('drone overload: abilities deal double and stun', r.overload >= r.plain * 1.9 && r.state === 'stun', JSON.stringify(r));
+  check('drone: no console errors', logs.length === 0, logs.join(' | '));
+  await close();
+}
+
 // ---- 10. endings: Null ending + new cycle
 {
-  const { page, logs, close } = await fresh(4);
+  const { page, logs, close } = await fresh(5);
   await page.evaluate(() => { const g = window.__wk; g.run.nullPoints = 4; g.run.remembrances = ['embrace', 'embrace', 'embrace', 'embrace', 'purify']; const n = g.world.nodes[0]; g.debugAt(n.pos.x + 2, n.pos.z); g.input.press('KeyE'); g.debugStep(3); });
   await page.waitForTimeout(4300);
   await page.evaluate(() => window.__wk.debugStep(5));

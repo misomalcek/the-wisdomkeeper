@@ -10,6 +10,8 @@ const CELL = 10;
 export class Colliders {
   private cells = new Map<number, Circle[]>();
   count = 0;
+  /** Mirror every circle into the physics world (as a fixed pillar). */
+  onAdd?: (x: number, z: number, r: number) => void;
 
   private key(cx: number, cz: number) {
     return (cx + 512) * 1024 + (cz + 512);
@@ -30,6 +32,7 @@ export class Colliders {
       }
     }
     this.count++;
+    this.onAdd?.(x, z, r);
   }
 
   /** Pushes (pos) out of any overlapping collider; returns the corrected position. */

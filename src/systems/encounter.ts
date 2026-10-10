@@ -18,8 +18,9 @@ export class Encounter {
   readonly duration: number;
   inside = true;
 
-  constructor(readonly anchor: Anchor, readonly kind: 'node' | 'pylon', stratumIndex: number, diff: number) {
-    this.duration = (kind === 'node' ? 9 + 2 * stratumIndex : 18 + 2 * stratumIndex) + (diff - 1) * 3;
+  constructor(readonly anchor: Anchor, readonly kind: 'node' | 'pylon', stratumIndex: number, diff: number, purgeMul = 1) {
+    // pylon purges stretch or shorten with the Mycelial Mind's pylonPurgeDifficulty directive
+    this.duration = ((kind === 'node' ? 9 + 2 * stratumIndex : 18 + 2 * stratumIndex) + (diff - 1) * 3) * (kind === 'pylon' ? purgeMul : 1);
   }
 
   get fraction() {

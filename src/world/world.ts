@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { worldTime } from '../engine/materials';
 import type { RunState } from '../types';
 import { STRATA, type Palette, type StratumDef } from '../story/strata';
 import { Rng, hashString } from '../util/rng';
@@ -11,6 +12,22 @@ import { FractalGate, MemoryNode, Pylon, SporeCache } from './structures';
 import { Motes, Sky, Spires } from './atmosphere';
 import { EchoGrove } from '../entities/echoes';
 import { Colliders } from './colliders';
+import { Physics } from '../physics/physics';
+import { DriftField, MushroomGroves, type TetherAnchor } from './traversal';
+import { Props } from './props';
+import { TerrainStreamer } from './chunks';
+import { Wilds } from './wilds';
+import { VeilSetPiece, layoutVeil, type VeilLayout } from './veil';
+
+/** How much traversal furniture each region gets. */
+const TRAVERSAL: Record<string, { mush: number; drift: number; crystals: number; pods: number }> = {
+  seedbed: { mush: 2, drift: 1, crystals: 4, pods: 10 },
+  river: { mush: 3, drift: 2, crystals: 4, pods: 14 },
+  canopy: { mush: 5, drift: 3, crystals: 5, pods: 14 },
+  veil: { mush: 3, drift: 4, crystals: 6, pods: 12 },
+  mirror: { mush: 1, drift: 3, crystals: 14, pods: 6 },
+  return: { mush: 3, drift: 2, crystals: 3, pods: 10 },
+};
 
 function shiftPalette(p: Palette, hue: number): Palette {
   if (Math.abs(hue) < 0.001) return p;
@@ -41,6 +58,10 @@ export class World {
   readonly radius: number;
   readonly palette: Palette;
   readonly terrain: Terrain;
+  /** Chunk-streamed ground (one batched draw call). */
+  readonly ground: TerrainStreamer;
+  /** Procedural flora and mycelium of the infinite Wilds (null in bounded boss arenas). */
+  readonly wilds: Wilds | null;
   readonly flora: Flora;
   readonly mycelium: Mycelium;
   readonly grove: EchoGrove;
@@ -48,6 +69,13 @@ export class World {
   readonly spires: Spires;
   readonly motes: Motes;
   readonly colliders = new Colliders();
+  readonly physics: Physics;
+  readonly mushrooms: MushroomGroves;
+  readonly drift: DriftField;
+  readonly props: Props;
+  /** Act IV: Elder Tree, mushroom bridges and datastreams. */
+  readonly veil: VeilSetPiece | null = null;
+  readonly tetherAnchors: TetherAnchor[] = [];
   readonly nodes: MemoryNode[] = [];
   readonly pylons: Pylon[] = [];
   readonly caches: SporeCache[] = [];
@@ -76,8 +104,16 @@ export class World {
       seed: baseSeed,
       palette: this.palette,
       grid: def.id === 'mirror' ? 0.9 : def.id === 'return' ? 0.35 : 0.6,
+      // boss arenas stay a closed bowl; every other region opens into the infinite Wilds
+      wild: !def.boss,
+      flavour: def.flora,
     });
-    this.group.add(this.terrain.mesh);
+    this.ground = new TerrainStreamer(this.terrain);
+    this.group.add(this.ground.mesh);
+    this.physics = new Physics((x, z) => this.terrain.heightAt(x, z));
+    this.wilds = this.terrain.wild ? new Wilds(this.terrain, this.physics, this.palette, baseSeed ^ 0x77, this.tetherAnchors) : null;
+    if (this.wilds) this.group.add(this.wilds.group);
+    this.colliders.onAdd = (x, z, r) => this.physics.addPillar(x, z, r);
 
     // ---- layout -----------------------------------------------------------------------
     const R = this.radius;
@@ -163,15 +199,70 @@ export class World {
     }
     this.camps.push(...campXZ);
 
+    // traversal furniture: mushroom stairs, drifting platforms, crystal clusters, spore pods
+    const tv = TRAVERSAL[def.id] ?? TRAVERSAL.seedbed;
+    const mushXZ: THREE.Vector2[] = [];
+    for (let i = 0; i < tv.mush; i++) {
+      const p = scatter(R * 0.16, 0.78);
+      if (p) {
+        mushXZ.push(p);
+        pois.push(p);
+      }
+    }
+    const driftXZ: THREE.Vector2[] = [];
+    for (let i = 0; i < tv.drift; i++) {
+      const p = scatter(R * 0.12, 0.7);
+      if (p) driftXZ.push(p);
+    }
+    const crystalXZ: THREE.Vector2[] = [];
+    for (let i = 0; i < tv.crystals; i++) {
+      const p = scatter(9, 0.85);
+      if (p) {
+        crystalXZ.push(p);
+        pois.push(p);
+      }
+    }
+    const podXZ: THREE.Vector2[] = [];
+    for (let i = 0; i < tv.pods; i++) {
+      const p = scatter(5, 0.8);
+      if (p) podXZ.push(p);
+    }
+
+    // Act IV: the Elder Tree stands between the Contacts, its bridges reaching each one and the Central Pylon
+    let veilLayout: VeilLayout | null = null;
+    if (def.contacts) {
+      let tp: THREE.Vector2 | null = null;
+      for (let tries = 0; tries < 60 && !tp; tries++) {
+        const c = at(rng.range(0.15, 0.55), rng.range(-0.12, 0.12));
+        if (dry(c) && clearOf(c, 24)) tp = c;
+      }
+      tp = tp ?? at(0.35, 0);
+      const targets = [...nodeXZ, gateXZ, ...pylonXZ.slice(0, 1)].map((p) => ({ x: p.x, z: p.y }));
+      veilLayout = layoutVeil(this.terrain, rng.fork('veil'), tp.x, tp.y, targets);
+      this.colliders.add(tp.x, tp.y, 5.4);
+      pois.push(tp);
+    }
+
     const avoid = [
+      ...(veilLayout ? [{ x: veilLayout.tree.x, z: veilLayout.tree.z, r: 16 }, ...veilLayout.caps.filter((c) => c.y - this.terrain.heightAt(c.x, c.z) < 6).map((c) => ({ x: c.x, z: c.z, r: c.r + 0.5 }))] : []),
       { x: startXZ.x, z: startXZ.y, r: 8 },
       { x: gateXZ.x, z: gateXZ.y, r: 10 },
-      ...nodeXZ.map((p) => ({ x: p.x, z: p.y, r: 8 })),
+      ...nodeXZ.map((p) => ({ x: p.x, z: p.y, r: def.contacts ? 13 : 8 })),
       ...pylonXZ.map((p) => ({ x: p.x, z: p.y, r: 9 })),
       ...cachesXZ.map((p) => ({ x: p.x, z: p.y, r: 3 })),
+      ...mushXZ.map((p) => ({ x: p.x, z: p.y, r: 8.5 })),
+      ...crystalXZ.map((p) => ({ x: p.x, z: p.y, r: 2.5 })),
     ];
+    this.wilds?.keepOut.push(...avoid.filter((a) => a.r >= 8).map((a) => ({ x: a.x, z: a.z, r: a.r + 4 })));
     this.flora = buildFlora(def, this.terrain, rng.fork('flora'), params.floraDensity, avoid, this.colliders, campXZ.map((c) => ({ x: c.x, z: c.z, r: c.r })));
     this.group.add(this.flora.group);
+
+    const vec = (l: THREE.Vector2[]) => l.map((p) => ({ x: p.x, z: p.y }));
+    this.mushrooms = new MushroomGroves(this.terrain, this.physics, rng.fork('mush'), this.palette, vec(mushXZ), veilLayout?.caps ?? []);
+    this.drift = new DriftField(this.terrain, this.physics, rng.fork('drift'), this.palette, vec(driftXZ));
+    this.props = new Props(this.physics, this.terrain, rng.fork('props'), this.palette, vec(crystalXZ), vec(podXZ));
+    this.group.add(this.mushrooms.group, this.drift.group, this.props.group);
+    this.tetherAnchors.push(...this.mushrooms.anchors, ...this.drift.anchors);
 
     this.mycelium = new Mycelium(this.terrain, rng.fork('myc'), this.palette);
     this.group.add(this.mycelium.lines);
@@ -179,7 +270,8 @@ export class World {
     this.group.add(this.grove.group);
 
     nodeXZ.forEach((p, i) => {
-      const n = new MemoryNode(this.palette, this.terrain, p.x, p.y, i, def.id === 'return');
+      const n = new MemoryNode(this.palette, this.terrain, p.x, p.y, i, def.id === 'return', !!def.contacts);
+      if (n.pad && veilLayout) n.pad.setArcTarget(new THREE.Vector3(veilLayout.tree.x, this.terrain.heightAt(veilLayout.tree.x, veilLayout.tree.z) + 14, veilLayout.tree.z), n.pos);
       this.nodes.push(n);
       this.group.add(n.group);
       this.mycelium.addTarget(p.x, p.y);
@@ -189,6 +281,7 @@ export class World {
       const py = new Pylon(this.palette, this.terrain, p.x, p.y, i);
       this.pylons.push(py);
       this.group.add(py.group);
+      this.tetherAnchors.push({ pos: py.pos.clone().setY(py.pos.y + 7.5), label: 'Pylon' });
       this.mycelium.addTarget(p.x, p.y);
       this.colliders.add(p.x, p.y, 3.8);
     });
@@ -199,10 +292,29 @@ export class World {
       this.colliders.add(p.x, p.y, 1.0);
     });
 
+    if (veilLayout) {
+      const cols: { x: number; z: number; y: number }[] = [];
+      const ring = (x: number, z: number, n: number, r: number) => {
+        for (let i = 0; i < n; i++) {
+          const a = (i / n) * TAU + i * 0.37;
+          const px = x + Math.cos(a) * r;
+          const pz = z + Math.sin(a) * r;
+          cols.push({ x: px, z: pz, y: this.terrain.heightAt(px, pz) });
+        }
+      };
+      ring(gateXZ.x, gateXZ.y, 6, 11);
+      for (const p of nodeXZ) ring(p.x, p.y, 2, 12);
+      ring(veilLayout.tree.x, veilLayout.tree.z, 4, 15);
+      const v = new VeilSetPiece(veilLayout, this.palette, rng.fork('veilfx'), cols);
+      (this as { veil: VeilSetPiece | null }).veil = v;
+      this.group.add(v.group);
+      this.tetherAnchors.push(...veilLayout.anchors);
+    }
+
     if (def.id !== 'return') {
       const center = new THREE.Vector3(0, 0, 0);
       this.gate = new FractalGate(this.palette, this.terrain, gateXZ.x, gateXZ.y, def.boss ? new THREE.Vector3(startXZ.x, 0, startXZ.y) : center);
-      this.gate.group.visible = !def.boss;
+      this.gate.group.visible = !def.boss && !def.contacts;
       this.group.add(this.gate.group);
       this.mycelium.addTarget(gateXZ.x, gateXZ.y);
     }
@@ -216,7 +328,7 @@ export class World {
     this.spires = new Spires(R, this.palette, def.id === 'mirror' ? 36 : 54);
     this.group.add(this.spires.mesh);
     this.motes = new Motes(R, def.id === 'mirror' ? 260 : 460, this.palette, def.id !== 'mirror');
-    this.group.add(this.motes.points);
+    this.group.add(this.motes.object);
   }
 
   /** The Return: every echo the player ever left, grown and wired together. */
@@ -253,15 +365,49 @@ export class World {
     this.mycelium.seed(0, 0, 14, 0, 120);
   }
 
-  update(dt: number, t: number, camPos: THREE.Vector3, pointScale: number, player: THREE.Vector3) {
+  /** Debug: nearest point (beyond the core) deep inside the given Wilds biome. */
+  debugFindBiome(biome: number): { x: number; z: number } | null {
+    const w = this.terrain.wild;
+    if (!w) return null;
+    for (let r = this.radius * 1.8; r < 900; r += 20) {
+      for (let a = 0; a < Math.PI * 2; a += 0.2) {
+        const x = Math.cos(a) * r;
+        const z = Math.sin(a) * r;
+        const b = w.biomeAt(x, z);
+        if (b.biome === biome && b.core > 0.95 && this.terrain.riverAt(x, z) < 0.01) return { x, z };
+      }
+    }
+    return null;
+  }
+
+  /** Stream ground, Wilds and physics around the hero. */
+  stream(x: number, z: number) {
+    this.ground.update(x, z, 2);
+    this.wilds?.update(x, z, 1);
+    this.physics.streamTerrain(x, z);
+  }
+
+  /** Build everything around (x, z) at once (region entry, respawn, fast travel). */
+  prime(x: number, z: number) {
+    this.ground.prime(x, z);
+    this.wilds?.prime(x, z);
+    this.physics.prime(x, z);
+  }
+
+  update(dt: number, t: number, camPos: THREE.Vector3, _pointScale: number, player: THREE.Vector3) {
+    worldTime.value = t;
     this.terrain.update(t);
     this.flora.update(t);
     this.mycelium.update(dt, t);
     this.grove.update(dt);
     this.sky.update(t, camPos);
-    this.motes.update(t, pointScale);
+    this.spires.mesh.position.set(camPos.x, 0, camPos.z);
+    this.motes.update();
     this.gate?.update(dt, t);
-    for (const n of this.nodes) n.update(dt, t);
+    this.mushrooms.update(t);
+    this.drift.update(t);
+    this.props.update(t);
+    for (const n of this.nodes) n.update(dt, t, camPos);
     for (const p of this.pylons) p.update(dt, t);
     for (const c of this.caches) c.update(dt, t);
 
@@ -326,6 +472,8 @@ export class World {
   }
 
   dispose() {
+    this.wilds?.dispose();
+    this.ground.dispose();
     this.terrain.dispose();
     this.flora.dispose();
     this.mycelium.dispose();
@@ -337,6 +485,11 @@ export class World {
     this.nodes.forEach((n) => n.dispose());
     this.pylons.forEach((n) => n.dispose());
     this.caches.forEach((n) => n.dispose());
+    this.mushrooms.dispose();
+    this.drift.dispose();
+    this.props.dispose();
+    this.veil?.dispose();
+    this.physics.dispose();
   }
 }
 
