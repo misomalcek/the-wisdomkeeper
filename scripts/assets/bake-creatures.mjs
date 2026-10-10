@@ -24,6 +24,7 @@ const JOBS = {
   voidConstruct: { mod: 'src/assets/nullModels.ts', geo: 'constructGeometry', rig: 'buildConstructRig', cell: 0.022, tris: 90000, out: 'models/void-construct.glb' },
   nullSprite: { mod: 'src/assets/minorModels.ts', geo: 'miteGeometry', cell: 0.0045, tris: 16000, out: 'models/null-sprite.glb' },
   thornCaster: { mod: 'src/assets/minorModels.ts', geo: 'spitterGeometry', cell: 0.006, tris: 22000, out: 'models/thorn-caster.glb' },
+  heroBoots: { mod: 'src/assets/bootModel.ts', geo: 'bootsGeometry', rig: 'buildBootRig', cell: 0.0035, tris: 36000, out: 'models/hero-boots.glb' },
   resonanceContact: { mod: 'src/assets/propModels.ts', geo: 'contactPadGeometry', cell: 0.016, tris: 40000, out: 'models/resonance-contact.glb' },
   datastreamDais: { mod: 'src/assets/propModels.ts', geo: 'datastreamDaisGeometry', cell: 0.012, tris: 24000, out: 'models/datastream-dais.glb' },
   dataPylon: { mod: 'src/assets/nullModels.ts', geo: 'dataPylonGeometry', cell: 0.014, tris: 40000, out: 'models/data-pylon.glb' },

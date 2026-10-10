@@ -5,6 +5,8 @@ import type { Skin } from '../types';
 import { clamp } from '../util/math';
 import { BONE, CREST_SEGS, CREST_STRANDS, LEG, applyLook, buildRig, heroGeometry, heroMaterial, heroTexturedMaterial, heroUniforms, rootBladeGeometry, type HeroLook } from '../assets/heroModel';
 import { loadedModel } from '../assets/pipeline';
+import { sculptMaterial } from '../assets/creatureMaterial';
+import { uniform } from 'three/tsl';
 
 export type MoveMode = 'ground' | 'air' | 'flight' | 'levitate';
 
@@ -92,6 +94,11 @@ export class Hero {
   private disposables: { dispose(): void }[] = [];
   /** Bind height of the hips and per-leg bone lengths / rest angles (about X) for the IK solve. */
   private hipsRest = 0.98;
+  /** Boot glow gain: lifts while levitating or flying. */
+  private bootBoost = uniform(-0.55);
+  private boots: THREE.SkinnedMesh | null = null;
+  /** The boots wear a darker carapace than the suit, lit by its vein colour. */
+  private bootU = { ...heroUniforms(), uT: this.u.uT, uHurt: this.u.uHurt };
   private leg = [{ l1: LEG.thigh, l2: LEG.shin, a0: 0, a1: 0 }, { l1: LEG.thigh, l2: LEG.shin, a0: 0, a1: 0 }];
 
   constructor(skin: Skin = 'resonant') {
@@ -117,6 +124,17 @@ export class Hero {
     this.mesh.frustumCulled = false;
     this.root.add(this.mesh);
     this.disposables.push(rig.skeleton);
+    // the GLB hero ends below the knees; its mycelial boots complete the legs on the same skeleton
+    const boots = model ? loadedModel('heroBoots')?.geometry : null;
+    if (boots) {
+      const bm = sculptMaterial(this.bootU, { mottle: 7, crackGlow: 0.35, rim: 0.2, boost: this.bootBoost, footfall: true });
+      this.boots = new THREE.SkinnedMesh(boots, bm);
+      this.boots.bind(rig.skeleton, this.mesh.bindMatrix);
+      this.boots.castShadow = true;
+      this.boots.frustumCulled = false;
+      this.root.add(this.boots);
+      this.disposables.push(bm);
+    }
 
     this.grip.position.set(0, -0.06, 0.012);
     this.bones[BONE.hdR].add(this.grip);
@@ -142,6 +160,8 @@ export class Hero {
   setSkin(skin: Skin) {
     const l = SKIN_LOOK[skin];
     applyLook(this.u, l);
+    const mixD = (c: number, t: number) => new THREE.Color(0x141a24).lerp(new THREE.Color(c), t).getHex();
+    applyLook(this.bootU, { body: mixD(l.body, 0.3), armor: mixD(l.armor, 0.15), vein: l.vein, accent: mixD(l.accent, 0.3), dark: 0x0a0e14 });
     this.glowMat.color.set(l.vein).multiplyScalar(2.2);
   }
 
@@ -174,6 +194,8 @@ export class Hero {
     this.time += dt;
     this.u.uT.value = this.time;
     this.u.uHurt.value = Math.max(0, p.hurt) * 0.8;
+    const lift = p.mode === 'flight' ? 1.6 : p.mode === 'levitate' ? 0.9 : !p.grounded ? 0 : -0.55;
+    this.bootBoost.value += (lift - this.bootBoost.value) * Math.min(1, dt * 6);
     const sp = clamp(p.speed / p.maxSpeed, 0, 1.4);
     const t: Record<JointKey, number> = {} as Record<JointKey, number>;
     for (const k of KEYS) t[k] = 0;

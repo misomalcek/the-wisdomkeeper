@@ -9,6 +9,7 @@
       "sockets": ["hand_r_root_blade", "back_thruster_pack", "head_antenna"],
       "variants": ["resonant", "verdant", "void"]
     },
+    "heroBoots": { "glb": "models/hero-boots.glb", "fallback": "sdf", "sockets": ["sole_l", "sole_r"] },
     "voidRootFiend": { "glb": "models/void-root-fiend.glb", "fallback": "sdf", "sockets": ["weak_point_core"] },
     "nullSentryDrone": { "glb": "models/null-sentry-drone.glb", "fallback": "sdf", "sockets": ["eye_lens"] },
     "voidConstruct": { "glb": "models/void-construct.glb", "fallback": "sdf", "sockets": ["resonance_core", "conduit_l", "conduit_r"] },

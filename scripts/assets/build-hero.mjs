@@ -150,6 +150,27 @@ log('simplifying body');
 const body = simplify(compact(bodyIdx), 72000, 0.02);
 log('simplifying spear');
 const spear = simplify(compact(spearIdx), 9000, 0.02);
+
+// ---- 3b. legs ------------------------------------------------------------------------------------------
+// The source sculpt was generated from a reference cropped at the knees, so it ends just below them. Lift the
+// figure by the missing shin and foot and scale it back to HEIGHT; the lower legs are the sculpted mycelial
+// boots (src/assets/bootModel.ts), skinned to the knee and ankle bones fitted here.
+const KNEE_ABOVE_CUT = 0.04, SHIN = 0.52, ANKLE = 0.09;
+const LIFT = SHIN + ANKLE - KNEE_ABOVE_CUT;
+const K = HEIGHT / (HEIGHT + LIFT);
+const relift = (arr) => {
+  for (let i = 0; i < arr.length; i += 3) {
+    arr[i] *= K;
+    arr[i + 1] = (arr[i + 1] + LIFT) * K;
+    arr[i + 2] *= K;
+  }
+};
+relift(body.pos);
+relift(spear.pos);
+relift(tipG);
+const tHandK = tHand * K;
+const CUT_Y = LIFT * K;
+log('legs: lift', LIFT.toFixed(3), 'scale', K.toFixed(3), 'cut at', CUT_Y.toFixed(3), 'm');
 const spearWorld = spear.pos.slice();
 
 // ---- 4. rig fit ----------------------------------------------------------------------------------------
@@ -168,8 +189,9 @@ function centroid(y0, y1, x0, x1) {
   // z: centre of the slab rather than the vertex mean (dense detail on one side would bias it)
   return [sx / c, sy / c, (zmin + zmax) / 2];
 }
-const yf = (srcY) => (srcY + 0.49) / bodyTop; // source-frame y → fraction of height
-const xf = (srcX) => srcX / bodyTop;
+// source-frame y → fraction of height (after the leg lift), source x → fraction of height
+const yf = (srcY) => (((srcY + 0.49) / bodyTop) * H + LIFT) * K / H;
+const xf = (srcX) => (srcX / bodyTop) * K;
 const J = {};
 // a limb's centre at height y: cluster the slab's vertices in the xz-plane (1.5 cm cells, flood fill) and take
 // the bounding-box centre of the cluster nearest the expected x
@@ -225,10 +247,24 @@ function slabCenter(srcY, x0, x1, half = 0.012) {
   return [(a + b) / 2, (y0 + y1) / 2, (c + d) / 2];
 }
 const X = { th: [-0.055, 0.065], kn: [-0.05, 0.085], ft: [-0.105, 0.097], el: [-0.145, 0.152], hd: [-0.156, 0.19] };
+// the stump just above the cut: its centre and half-extents seat the knee joint and the boot cuff
+function stumpAt(y, x0, x1) {
+  let a = Infinity, b = -Infinity, c = Infinity, d = -Infinity;
+  for (let i = 0; i < nb; i++) {
+    const x = body.pos[i * 3], yy = body.pos[i * 3 + 1], z = body.pos[i * 3 + 2];
+    if (Math.abs(yy - y) > 0.012 || x < x0 || x > x1) continue;
+    a = Math.min(a, x); b = Math.max(b, x); c = Math.min(c, z); d = Math.max(d, z);
+  }
+  return { c: [(a + b) / 2, y, (c + d) / 2], rx: (b - a) / 2, rz: (d - c) / 2 };
+}
+const STUMP = {};
 for (const [s, k] of [['L', 0], ['R', 1]]) {
-  at(`kn${s}`, k ? slabCenter(-0.27, 0.0, 0.37) : slabCenter(-0.27, -0.32, 0.0));
+  const st = (STUMP[s] = stumpAt(CUT_Y + 0.03, k ? 0 : -0.5, k ? 0.5 : 0));
+  const top = stumpAt(CUT_Y + 0.12, k ? 0 : -0.5, k ? 0.5 : 0);
+  st.top = top;
+  at(`kn${s}`, [st.c[0], CUT_Y + KNEE_ABOVE_CUT * K, st.c[2]]);
   at(`th${s}`, [J[`kn${s}`][0] * 0.72, yf(-0.065) * H, J.hips[2]]);
-  at(`ft${s}`, k ? slabCenter(-0.45, 0.0, 0.45) : slabCenter(-0.45, -0.42, 0.0));
+  at(`ft${s}`, [st.c[0] * 1.05, ANKLE * K, st.c[2] - 0.02]);
   at(`el${s}`, limbCenter(-0.08, X.el[k]));
   at(`hd${s}`, limbCenter(-0.235, X.hd[k]));
   // shoulder: under the deltoid, two thirds out from the spine to the arm's outer edge
@@ -257,6 +293,8 @@ if (process.env.DEBUG_FIT) {
   await sharp(Buffer.from(img), { raw: { width: Wd, height: Hd, channels: 3 } }).png().toFile(process.env.DEBUG_FIT);
 }
 for (const [k, v] of Object.entries(J)) log('joint', k.padEnd(6), v.map((x) => x.toFixed(3)).join(' '));
+for (const [s, st] of Object.entries(STUMP)) log('stump', s, st.c.map((x) => x.toFixed(3)).join(' '), 'r', st.rx.toFixed(3), st.rz.toFixed(3), 'top r', st.top.rx.toFixed(3), st.top.rz.toFixed(3));
+(await import('node:fs')).writeFileSync('src/assets/hero-fit.json', JSON.stringify({ joints: J, stump: STUMP, cutY: CUT_Y, scale: K }, (_, v) => (typeof v === 'number' ? +v.toFixed(4) : v), 1) + '\n');
 
 // ---- 5. skin weights -----------------------------------------------------------------------------------
 const BONE = { body: 0, hips: 1, spine: 2, chest: 3, head: 4, thL: 5, knL: 6, ftL: 7, thR: 8, knR: 9, ftR: 10, shL: 11, elL: 12, hdL: 13, shR: 14, elR: 15, hdR: 16 };
@@ -341,7 +379,7 @@ log('skinned', nb, 'vertices');
 
 // ---- spear into grip space: hand at origin, tip along +Y ----------------------------------------------
 // the grip point is where the right hand closes on the shaft: the axis point nearest the fitted wrist
-const grip = add(tipG, scale(dG, tHand));
+const grip = add(tipG, scale(dG, tHandK));
 // basis: y' = -d (toward tip); x' ⟂ in the horizontal plane; z' = x' × y'
 const yA = scale(dG, -1);
 let xA = [yA[2], 0, -yA[0]];

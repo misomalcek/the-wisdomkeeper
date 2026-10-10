@@ -1,6 +1,6 @@
 import { MeshStandardNodeMaterial } from 'three/webgpu';
-import { attribute, clamp, float, materialEmissive, mix, positionGeometry, sin, smoothstep, vec3 } from 'three/tsl';
-import { fbm2, fresnel, proceduralBump, type N } from '../engine/materials';
+import { attribute, clamp, exp, float, materialEmissive, mix, positionGeometry, positionWorld, sin, smoothstep, vec3 } from 'three/tsl';
+import { fbm2, footContact, fresnel, proceduralBump, type N } from '../engine/materials';
 import type { HeroUniforms } from './heroModel';
 
 export interface SculptLookOpts {
@@ -10,6 +10,10 @@ export interface SculptLookOpts {
   mottle?: number;
   /** Rim light gain. */
   rim?: number;
+  /** Extra gain on the lit (glow-material) parts, e.g. the hero's boots while levitating or flying. */
+  boost?: N;
+  /** Lit parts flare where the hero's last footfall landed (the Fractal-Neural footfall uniform). */
+  footfall?: boolean;
 }
 
 /**
@@ -45,9 +49,15 @@ export function sculptMaterial(u: HeroUniforms, o: SculptLookOpts = {}) {
   const crack = smoothstep(0.62, 0.3, ao).mul(smoothstep(0.45, 0.7, n2));
   const flow = sin(p.y.mul(6).sub(u.uT.mul(3.4)).add(n1.mul(9))).mul(0.5).add(0.5);
   const pulse = sin(u.uT.mul(1.5 * 6.283).sub(p.y.mul(3))).mul(0.5).add(0.5);
+  let lit: N = pulse.mul(1.4).add(1.1);
+  if (o.boost) lit = lit.mul(o.boost.add(1));
+  if (o.footfall) {
+    const d = positionWorld.xz.sub(footContact.xz).length();
+    lit = lit.add(smoothstep(0.5, 0.05, d).mul(exp(footContact.w.mul(-4))).mul(4));
+  }
   m.emissiveNode = materialEmissive
     .add(u.cGlow.mul(crack.mul(flow.mul(0.9).add(0.3)).mul((o.crackGlow ?? 0.6) * 1.1).mul(wS.add(wA).add(wD))))
-    .add(u.cGlow.mul(wG.mul(pulse.mul(1.4).add(1.1))))
+    .add(u.cGlow.mul(wG.mul(lit)))
     .add(u.cBlade.mul(wB.mul(0.4)))
     .add(u.cGlow.mul(fresnel(3).mul((o.rim ?? 0.25)).mul(occ)))
     .add(vec3(1, 0.25, 0.35).mul(u.uHurt));
