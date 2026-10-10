@@ -51,8 +51,9 @@ if (solo !== null) {
     h.root.position.x = 0;
     h.root.rotation.y = Number(qs.get('yaw') ?? 0);
   });
-  cam.position.set(0, 1.25, 3.6);
-  cam.lookAt(0, 1.05, 0);
+  const cy = Number(qs.get('cy') ?? 1.05), cd = Number(qs.get('cd') ?? 3.6);
+  cam.position.set(0, cy + 0.2, cd);
+  cam.lookAt(0, cy, 0);
 } else if (grp >= 0) {
   const cx = (grp * 4 + 1.5 - (poses.length - 1) / 2) * 2.2;
   cam.position.set(cx, 1.5, 5.2);
