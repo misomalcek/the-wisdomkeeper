@@ -1,7 +1,7 @@
 import type { PlayerTelemetry } from './bio/mindState';
 export type Affinity = 'root' | 'echo' | 'flow';
 export type StratumId = 'seedbed' | 'river' | 'canopy' | 'veil' | 'mirror' | 'return';
-export type EnemyKind = 'mite' | 'spitter' | 'brute' | 'drone' | 'pylon' | 'boss';
+export type EnemyKind = 'mite' | 'spitter' | 'brute' | 'drone' | 'stalker' | 'bloater' | 'prism' | 'lasher' | 'pylon' | 'boss';
 /** Which boss a stratum fields: the Null Warden (Interlude) or the Void-Infused Construct (Act IV). */
 export type BossVariant = 'warden' | 'construct';
 export type Slot = 'helm' | 'armor' | 'boots' | 'blade' | 'modulator' | 'core';
@@ -101,6 +101,22 @@ export interface RunState {
   telemetry?: PlayerTelemetry;
   /** Side missions offered by the Neural World Director. */
   missions?: Mission[];
+  /** Storycard punches: the chronological log of story beats (optional for older saves). */
+  punches?: Punch[];
+}
+
+export type PunchKind =
+  | 'cycle' | 'stratum' | 'camp' | 'pylon' | 'remembrance' | 'contact' | 'choice' | 'mission' | 'boss' | 'level' | 'death' | 'ending' | 'note';
+/** One human-readable story beat punched onto the player's Storycard. */
+export interface Punch {
+  kind: PunchKind;
+  text: string;
+  /** Stratum index the beat happened in. */
+  stratum: number;
+  cycle: number;
+  level: number;
+  /** ISO timestamp; absent on punches reconstructed from an older save. */
+  at?: string;
 }
 
 export interface LibraryEntry {

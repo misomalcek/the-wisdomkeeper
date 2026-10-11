@@ -2,9 +2,10 @@ import * as THREE from 'three';
 import { MeshStandardNodeMaterial } from 'three/webgpu';
 import {
   Fn, Loop, uniform, uniformArray, attribute, positionWorld, positionView, normalWorld, float, vec2, vec3, color, mix, sin,
-  fract, abs, max, min, clamp, fwidth, exp, dot, distance, atan, smoothstep as sstep, pow,
+  fract, abs, max, min, clamp, fwidth, exp, dot, distance, atan, smoothstep as sstep, pow, texture, floor, cos, step,
 } from 'three/tsl';
-import { worldTime, fbm2, conduction, type N } from '../engine/materials';
+import { worldTime, fbm2, conduction, proceduralBump, hash21, type N } from '../engine/materials';
+import { fractalTexture, surfaceDetail, surfaces } from '../engine/proctex';
 import { WildField } from './gen/field';
 import { fbm, makeNoise2D, type Noise2D } from '../util/rng';
 import { smoothstep } from '../util/math';
@@ -128,15 +129,50 @@ export class Terrain {
     const mott = sin(w.x.mul(0.37).add(sin(w.z.mul(0.23)).mul(2))).mul(sin(w.z.mul(0.31).add(sin(w.x.mul(0.19)).mul(2))));
     const grain = fbm2(w.xz.mul(0.45));
     let albedo: N = mix(u.base, u.high, h);
-    albedo = mix(albedo, u.base.mul(0.55).add(vec3(0.03, 0.03, 0.035)), slope.mul(0.75));
     albedo = albedo.mul(mott.mul(mott).mul(0.35).add(0.8).add(grain.sub(0.5).mul(0.35)));
+
+    // ---- procedural ground (engine/proctex): cracked soil, pebbles and moss at two scales, so it never tiles
+    const near = float(1).sub(sstep(30, 90, dist));
+    const gt: N = texture(surfaces.ground, w.xz.mul(0.16));
+    const gm: N = texture(surfaces.ground, vec2(w.z.mul(0.029).add(0.37), w.x.mul(0.029).sub(0.11)));
+    const cracks: N = gt.r.mul(sstep(0.35, 0.6, gm.b)).mul(near);
+    const pebbles: N = gt.g.mul(near.mul(0.7).add(0.3));
+    const moss: N = sstep(0.3, 0.75, gm.a.mul(0.7).add(gt.a.mul(0.4))).mul(sstep(0.82, 0.95, normalWorld.y));
+    albedo = albedo.mul(gm.b.mul(0.45).add(0.78)).mul(gt.b.mul(0.25).add(0.88));
+    albedo = mix(albedo, u.base.mul(0.5).add(u.accent.mul(0.07)).add(vec3(0.02, 0.05, 0.02)), moss.mul(0.6));
+    albedo = mix(albedo, u.high.mul(1.15), pebbles.mul(0.3));
+    albedo = albedo.mul(float(1).sub(cracks.mul(0.6)));
+    // hills: layered rock strata on the slopes, the bands warped by noise and cut by the stone texture's joints
+    const st: N = texture(surfaces.stone, vec2(w.x.add(w.z).mul(0.21), w.y.mul(0.32)));
+    const strata: N = sin(w.y.mul(2.6).add(gm.b.mul(9))).mul(0.5).add(0.5);
+    const rock: N = u.base.mul(0.55).add(vec3(0.035, 0.032, 0.04)).mul(strata.mul(0.45).add(0.7)).mul(st.g.mul(0.5).add(0.6)).mul(float(1).sub(st.b.mul(0.5)));
+    albedo = mix(albedo, rock, slope.mul(0.85));
     albedo = mix(albedo, color(0x0a0003), cor.mul(0.75));
+    if (surfaceDetail > 0) {
+      const relief: N = pebbles.mul(0.5).sub(cracks.mul(0.9)).add(moss.mul(0.2)).add(slope.mul(strata.mul(0.8).sub(st.b.mul(0.6))));
+      m.normalNode = proceduralBump(relief.mul(float(1).sub(sstep(14, 45, dist))), 0.09);
+    }
 
     // ---- emission
     const fadeNear = float(1).sub(sstep(26, 70, dist));
     const lines = gridLine(0.25).mul(0.25).add(gridLine(0.05).mul(0.55)).mul(u.grid).mul(glow.mul(1.5).add(0.3)).mul(fadeNear);
     let emit: N = mix(u.accent, u.accent2, sin(w.x.mul(0.05).add(t.mul(0.2))).mul(0.5).add(0.5)).mul(lines);
     emit = emit.add(u.accent.mul(glow).mul(0.05));
+
+    // fractal rings: here and there a Mandelbrot or Julia glyph is written into the soil in light, a pulse
+    // running out from its heart; one candidate per 46 m cell, about a fifth of the cells carry one
+    const cell: N = floor(w.xz.div(46));
+    const hc: N = hash21(cell);
+    const ctr: N = cell.add(vec2(hash21(cell.add(7.1)), hash21(cell.add(3.3))).mul(0.5).add(0.25)).mul(46);
+    const rad: N = hc.mul(3).add(4.5);
+    const ang: N = hash21(cell.add(11.7)).mul(6.283);
+    const dl: N = w.xz.sub(ctr);
+    const lp: N = vec2(dl.x.mul(cos(ang)).sub(dl.y.mul(sin(ang))), dl.x.mul(sin(ang)).add(dl.y.mul(cos(ang)))).div(rad.mul(2)).add(0.5);
+    const fg: N = texture(fractalTexture(), lp);
+    const glyphOn: N = step(hc, 0.21).mul(float(1).sub(sstep(0.42, 0.5, dl.length().div(rad.mul(2)))));
+    const glyphLine: N = pow(mix(fg.r, fg.g, step(0.5, hash21(cell.add(5.9)))), float(2.5));
+    const ripple: N = sin(dl.length().mul(1.4).sub(t.mul(1.8))).mul(0.5).add(0.5);
+    emit = emit.add(mix(u.accent, u.accent2, ripple).mul(glyphLine.mul(ripple.mul(0.6).add(0.4)).mul(glyphOn).mul(0.6)).mul(float(1).sub(sstep(60, 140, dist))));
 
     // bioluminescent data streams threading the ground, pulsing along their length
     const w1 = w.x.mul(0.11).add(sin(w.z.mul(0.07)).mul(3)).add(sin(w.z.mul(0.19).add(1.3)).mul(1.3));

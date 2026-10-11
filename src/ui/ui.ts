@@ -68,8 +68,8 @@ export interface InvHandlers {
 }
 
 type OverlayId =
-  | 'title' | 'prologue' | 'choice' | 'binary' | 'timeline' | 'controls' | 'library' | 'pause' | 'death' | 'ending' | 'inventory' | 'map';
-const ALL: OverlayId[] = ['title', 'prologue', 'choice', 'binary', 'timeline', 'controls', 'library', 'pause', 'death', 'ending', 'inventory', 'map'];
+  | 'title' | 'prologue' | 'choice' | 'binary' | 'timeline' | 'controls' | 'library' | 'pause' | 'death' | 'ending' | 'inventory' | 'map' | 'storycards';
+const ALL: OverlayId[] = ['title', 'prologue', 'choice', 'binary', 'timeline', 'controls', 'library', 'pause', 'death', 'ending', 'inventory', 'map', 'storycards'];
 
 const SLOT_ICON: Record<Slot, string> = { helm: '◭', armor: '⬡', boots: '◢', blade: '⟋', modulator: '❂', core: '◈' };
 

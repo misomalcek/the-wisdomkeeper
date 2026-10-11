@@ -8,6 +8,7 @@ import type { Terrain } from './terrain';
 import { GOLDEN_ANGLE, TAU } from '../util/math';
 import { occlusionFade } from './occlusion';
 import { LAYER, RAPIER, type Physics, type Stepper } from '../physics/physics';
+import { stemMaterial, stoneMaterial } from '../engine/surfaces';
 
 /** A point the Mycelial Tether can latch onto. `pos` is live (moving platforms update it). */
 export interface TetherAnchor {
@@ -117,7 +118,7 @@ export class MushroomGroves {
       .mul(clamp(normalWorld.y.negate(), 0, 1).mul(0.9).add(0.1))
       .add(diffuseColor.rgb.mul(veinsN.mul(0.55).mul(floraGlow)));
     occlusionFade(capMat);
-    const stalkMat = occlusionFade(standard({ color: 0xffffff, roughness: 0.8 }));
+    const stalkMat = occlusionFade(stemMaterial());
     this.rimMat = glowBasic({ color: 0xffffff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
     this.disposables.push(capGeo, stalkGeo, rimGeo, capMat, stalkMat, this.rimMat);
 
@@ -317,7 +318,8 @@ export class DriftField {
     slabGeo.computeVertexNormals();
     const trimGeo = new THREE.BoxGeometry(3.6, 0.08, 2.6);
     const coreGeo = new THREE.OctahedronGeometry(0.32, 0);
-    const slabMat = standard({ color: 0x232838, roughness: 0.45, metalness: 0.7, emissive: pal.accent, emissiveIntensity: 0.04 });
+    const slabMat = stoneMaterial(pal.accent, { roughness: 0.45, metalness: 0.6, scale: 0.6 });
+    slabMat.color.set(0x2a3042);
     const trimMat = glowBasic({ color: new THREE.Color(pal.accent).multiplyScalar(2.2) });
     this.base = new THREE.Color(pal.accent);
     this.coreMat = glowBasic({ color: this.base.clone().multiplyScalar(2.6) });

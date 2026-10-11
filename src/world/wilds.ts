@@ -13,8 +13,9 @@ import { interpret, CANOPY_TREE, FERN_BUSH, BLIGHT_TREE, type Species } from './
 import { vogel } from './gen/phyllotaxis';
 import { growHyphae } from './gen/hyphae';
 import { CHUNK } from './chunks';
-import { selfLit, standard, glow, worldTime, floraGlow, type N } from '../engine/materials';
+import { selfLit, glow, worldTime, floraGlow, type N } from '../engine/materials';
 import { occlusionFade } from './occlusion';
+import { barkMaterial, capMaterial, crystalMaterial, stemMaterial, tuftMaterial } from '../engine/surfaces';
 
 /** Chebyshev radius (in chunks) of the living Wilds around the hero. */
 const FLORA_RINGS = 2;
@@ -154,13 +155,13 @@ export class Wilds {
     private anchors: TetherAnchor[],
   ) {
     for (let i = SLOTS - 1; i >= 0; i--) this.freeSlots.push(i);
-    this.bark = new Pool(new THREE.CylinderGeometry(0.62, 1, 1, 5, 1, true).translate(0, 0.5, 0), occlusionFade(standard({ roughness: 0.78, metalness: 0.04, side: THREE.DoubleSide })), 1600);
+    this.bark = new Pool(new THREE.CylinderGeometry(0.62, 1, 1, 5, 1, true).translate(0, 0.5, 0), occlusionFade(barkMaterial({ roughness: 0.78, side: THREE.DoubleSide })), 1600);
     this.tips = new Pool(new THREE.OctahedronGeometry(0.3, 0), occlusionFade(selfLit(1.25, { roughness: 0.4 })), 640, false);
     const capGeo = new THREE.SphereGeometry(1, 10, 5, 0, TAU, 0, Math.PI / 2);
-    this.stems = new Pool(new THREE.CylinderGeometry(0.11, 0.2, 1, 6, 1, true).translate(0, 0.5, 0), occlusionFade(standard({ roughness: 0.8 })), 90);
-    this.caps = new Pool(capGeo, occlusionFade(selfLit(0.55, { side: THREE.DoubleSide, roughness: 0.5 })), 90, false);
-    this.crystals = new Pool(new THREE.CylinderGeometry(0.0, 0.32, 1, 6, 1).translate(0, 0.5, 0), occlusionFade(selfLit(0.85, { roughness: 0.1, metalness: 0.2 })), 90);
-    this.tufts = new Pool(new THREE.ConeGeometry(0.1, 0.8, 4).translate(0, 0.4, 0), selfLit(0.45), 300, false);
+    this.stems = new Pool(new THREE.CylinderGeometry(0.11, 0.2, 1, 6, 1, true).translate(0, 0.5, 0), occlusionFade(stemMaterial()), 90);
+    this.caps = new Pool(capGeo, occlusionFade(capMaterial(0.55)), 90, false);
+    this.crystals = new Pool(new THREE.CylinderGeometry(0.0, 0.32, 1, 6, 1).translate(0, 0.5, 0), occlusionFade(crystalMaterial(0.85)), 90);
+    this.tufts = new Pool(new THREE.ConeGeometry(0.1, 0.8, 4).translate(0, 0.4, 0), tuftMaterial(0.45), 300, false);
     for (const p of [this.bark, this.tips, this.stems, this.caps, this.crystals, this.tufts]) this.group.add(p.mesh);
 
     // mycelial cords: one LineSegments buffer, slot ranges per chunk

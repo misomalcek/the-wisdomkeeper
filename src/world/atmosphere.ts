@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import { MeshBasicNodeMaterial, SpriteNodeMaterial } from 'three/webgpu';
 import {
-  uniform, float, vec2, vec3, vec4, color, mix, sin, cos, floor, pow, max, clamp, step, smoothstep, dot, atan, asin, exp, mod,
+  uniform, float, vec2, vec3, vec4, color, mix, sin, cos, floor, texture, pow, max, clamp, step, smoothstep, dot, atan, asin, exp, mod,
   positionLocal, positionGeometry, positionWorld, positionView, normalize, uv, instancedBufferAttribute, mrt, output,
 } from 'three/tsl';
 import type { Palette } from '../story/strata';
 import { worldTime, hash21, glow, type N } from '../engine/materials';
+import { nebulaTexture } from '../engine/proctex';
 
 /** Blueprint twin moons: primary cyan 0x00e1ff, secondary magenta 0xff0077 at 0.65 scale. */
 export const MOON_A = new THREE.Vector3(-150, 200, -400).normalize();
@@ -33,6 +34,20 @@ export class Sky {
     const band = sin(suv.x.mul(3).add(sin(suv.y.mul(5).add(t.mul(0.12))).mul(2)).add(t.mul(0.05)));
     const a = smoothstep(0.35, 1, band).mul(smoothstep(0.08, 0.35, y)).mul(float(1).sub(smoothstep(0.5, 0.95, y)));
     col = col.add(mix(u.accent, u.accent2, sin(suv.x.mul(2)).mul(0.5).add(0.5)).mul(a).mul(0.22));
+    // the Buddhabrot nebula: the inverted Mandelbrot hangs in the sky opposite the moons, gnomonic-projected
+    // around its centre direction, slowly turning, its own colours pulled toward the region's palette
+    const nc = new THREE.Vector3(0.55, 0.42, 0.72).normalize();
+    const nt = new THREE.Vector3(0, 1, 0).cross(nc).normalize();
+    const nb = nc.clone().cross(nt).normalize();
+    const dn: N = dot(d, vec3(nc.x, nc.y, nc.z));
+    const rot: N = t.mul(0.004);
+    const px: N = dot(d, vec3(nt.x, nt.y, nt.z)).div(max(dn, 0.05));
+    const py: N = dot(d, vec3(nb.x, nb.y, nb.z)).div(max(dn, 0.05));
+    const nuv: N = vec2(px.mul(cos(rot)).sub(py.mul(sin(rot))), px.mul(sin(rot)).add(py.mul(cos(rot)))).mul(0.62).add(0.5);
+    const neb: N = texture(nebulaTexture(), nuv).rgb;
+    const nebMask: N = smoothstep(0.25, 0.5, dn).mul(smoothstep(0.5, 0.42, nuv.sub(0.5).length())).mul(smoothstep(-0.05, 0.2, y));
+    const tinted: N = u.accent2.mul(neb.r).add(u.accent.mul(neb.g)).add(u.top.mul(4).add(0.15).mul(neb.b));
+    col = col.add(mix(neb, tinted, 0.55).mul(nebMask).mul(0.5));
     // twin moons with craters and halos
     const d1 = dot(d, vec3(MOON_A.x, MOON_A.y, MOON_A.z));
     const d2 = dot(d, vec3(MOON_B.x, MOON_B.y, MOON_B.z));

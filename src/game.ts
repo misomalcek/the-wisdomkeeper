@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Affinity, BossVariant, Choice, EnemyKind, Item, LibraryEntry, PlayStats, Remembrance, RunState, Skin } from './types';
+import type { Affinity, BossVariant, Choice, EnemyKind, Item, LibraryEntry, PlayStats, PunchKind, Remembrance, RunState, Skin } from './types';
 import { setPortraitRenderer } from './ui/portrait';
 import { Gfx } from './engine/gfx';
 import { ThirdPersonCam } from './engine/camera';
@@ -21,7 +21,7 @@ import {
   RARITY, SLOT_LABEL, addXp, derive, generateItem, rankUp, rollRarity, skinUnlocked, xpToNext, type Derived,
 } from './systems/progress';
 import { Player, type Intent } from './entities/player';
-import { Enemy, ENEMY_COST, ENEMY_NAME, enemyName, purgeStun, updateEnemy, updateSquads } from './entities/enemies';
+import { Enemy, ENEMY_COST, ENEMY_NAME, ROAM_KINDS, enemyName, purgeStun, updateEnemy, updateSquads, type RoamKind } from './entities/enemies';
 import { NeuralDirector, type DirectorPhase } from './bio/director';
 import { freshTelemetry, type PlayerTelemetry } from './bio/mindState';
 import { floraGlow } from './engine/materials';
@@ -36,6 +36,9 @@ import { TraversalUI, type TravMode } from './ui/traversal-ui';
 import { MAX_FIBER, TETHER_RANGE } from './entities/player';
 import type { TetherAnchor } from './world/traversal';
 import { LAYER } from './physics/physics';
+import { StoryDeck, addPunch, buildStorycard, lastPunchOf, mergeLibrary, runFromCard, type Storycard } from './systems/storycards';
+import { StorycardsPanel } from './ui/storycardsPanel';
+import { setSurfaceDetail } from './engine/proctex';
 
 type Mode = 'title' | 'prologue' | 'play' | 'choice' | 'transition' | 'dead' | 'ending';
 
@@ -158,6 +161,9 @@ export class Game {
   /** Act IV: the Construct's data-river pylons and the breach window when they all fall. */
   private veil: { pylons: Enemy[]; breach: number; wave: number } | null = null;
   private contactsLinked = 0;
+  /** Storycards: autosave deck (last few distinct cards) and its overlay. */
+  private deck = new StoryDeck(() => localStorage);
+  private cards = new StorycardsPanel();
 
   /** Blueprint telemetry for the Mycelial Mind (persisted with the run). */
   get telemetry(): PlayerTelemetry {
@@ -227,6 +233,11 @@ export class Game {
   saveRun() {
     this.run.fiber = Math.round(this.player.fiber);
     store.set(SAVE_KEY, this.run);
+    this.deck.push(buildStorycard(this.run));
+  }
+  /** Punch a story beat onto the run's Storycard (persisted with the next save). */
+  punch(kind: PunchKind, text: string) {
+    addPunch(this.run, kind, text);
   }
   private loadRun(): RunState | null {
     const r = store.get<RunState>(SAVE_KEY);
@@ -252,10 +263,27 @@ export class Game {
       if (r) this.continueRun(r);
     });
     ui.on('btn-library', () => ui.library(this.library()));
+    this.cards.bind({
+      current: () => {
+        const r = this.mode === 'title' ? this.loadRun() : { ...this.run, fiber: Math.round(this.player.fiber) };
+        return r ? buildStorycard(r, this.library()) : null;
+      },
+      deck: () => this.deck.list(),
+      load: (card) => this.loadCard(card),
+    });
+    const openCards = () => {
+      ui.hide('pause');
+      this.cards.setStatus('');
+      this.cards.render();
+      ui.show('storycards');
+    };
+    ui.on('btn-storycards', openCards);
+    ui.on('btn-storycards-p', openCards);
     ui.on('btn-controls', () => ui.show('controls'));
     ui.bindClose((id) => {
       ui.hide(id);
       if ((id === 'timeline' || id === 'inventory' || id === 'map') && this.mode !== 'title') this.closeOverlayResume();
+      if (id === 'storycards' && this.mode === 'play' && this.paused) ui.show('pause');
     });
     ui.on('btn-resume', () => this.setPaused(false));
     ui.on('btn-layers', () => {
@@ -369,6 +397,7 @@ export class Game {
       remembrances: [],
       crystals: 0,
       telemetry: freshTelemetry(),
+      punches: [],
     };
     this.mind = new MycelialMind(seed);
     this.director = new NeuralDirector(seed);
@@ -386,6 +415,7 @@ export class Game {
     const saved = this.loadRun();
     if (saved && saved.stratumIndex > 0 && !window.confirm('Begin a new story? Your saved progress will be replaced.')) return;
     this.newRun(1);
+    this.punch('cycle', 'Cycle 1 began — a seed in the soil of code');
     store.del(SAVE_KEY);
     this.startPrologue([OPENING_QUOTE, SECOND_QUOTE]);
   }
@@ -399,6 +429,7 @@ export class Game {
     this.run.level = Math.max(1, Math.floor(prev.level / 2));
     this.run.skin = prev.skin;
     this.refreshDerived();
+    this.punch('cycle', `Cycle ${cycle} began — the Keeper carries level ${this.run.level} into new soil`);
     store.del(SAVE_KEY);
     this.startPrologue(['Every ending is a seed.', OPENING_QUOTE, `Cycle ${cycle}. The soil is different this time — and so, perhaps, are you.`]);
   }
@@ -428,6 +459,20 @@ export class Game {
     this.input.requestLock();
   }
 
+  /** Replace the current progress with a Storycard (upload or autosave deck). */
+  private loadCard(card: Storycard): boolean {
+    const saved = this.loadRun();
+    const live = this.mode !== 'title';
+    if ((live || (saved && saved.stratumIndex > 0)) && !window.confirm(`Load the storycard “${card.title}”? Your current progress will be replaced — it stays in the autosave deck so you can roll back.`)) return false;
+    if (live) this.saveRun();
+    else if (saved) this.deck.push(buildStorycard(saved));
+    store.set(LIB_KEY, mergeLibrary(this.library(), card.library));
+    this.ui.hideAll();
+    this.paused = false;
+    this.continueRun(runFromCard(card));
+    return true;
+  }
+
   private toTitle() {
     this.ui.hideAll();
     this.paused = false;
@@ -452,6 +497,7 @@ export class Game {
     }
     this.def = def;
     this.gfx.grace = 3.5;
+    setSurfaceDetail(this.gfx.quality);
     this.world = new World(def, this.run);
     this.gfx.scene.add(this.world.group);
     this.world.prime(this.world.startPos.x, this.world.startPos.z);
@@ -548,6 +594,7 @@ export class Game {
       this.boss = this.enemies.find((e) => e.kind === 'boss') ?? null;
     }
 
+    if (lastPunchOf(this.run, 'stratum')?.stratum !== index) this.punch('stratum', `Entered ${this.def.name} — ${this.def.act}`);
     this.mode = 'play';
     this.ui.hideAll();
     this.ui.setHudVisible(true);
@@ -697,9 +744,11 @@ export class Game {
         this.ui.hide('inventory');
         this.ui.hide('map');
         if (this.mode === 'play') this.closeOverlayResume();
-      } else if (this.ui.isOpen('controls') || this.ui.isOpen('library')) {
+      } else if (this.ui.isOpen('controls') || this.ui.isOpen('library') || this.ui.isOpen('storycards')) {
+        if (this.ui.isOpen('storycards') && this.mode === 'play' && this.paused) this.ui.show('pause');
         this.ui.hide('controls');
         this.ui.hide('library');
+        this.ui.hide('storycards');
       } else if (this.mode === 'play') this.setPaused(!this.paused);
     }
     if (this.mode === 'play' || (this.mode === 'choice' && false)) {
@@ -1029,17 +1078,35 @@ export class Game {
     const idx = def.index;
     const out: EnemyKind[] = [];
     const small = (n: number) => {
-      for (let i = 0; i < n; i++) out.push(def.mix.spitter > 0 && Math.random() < def.mix.spitter / (1 + def.mix.spitter) * 0.8 ? 'spitter' : 'mite');
+      for (let i = 0; i < n; i++) out.push(this.pickKind(['mite', 'spitter', 'stalker', 'bloater'], Math.random));
     };
+    const mix = def.mix;
     if (spec.kind === 'node') {
-      if (def.mix.brute > 0) out.push('brute');
+      if (mix.brute > 0) out.push('brute');
       if (idx >= 2 && spec.nodeIndex !== 0) out.push('brute');
+      // the deeper guardians: a Root Lasher under the grove, a Fractal Prism sheltering the pack
+      if ((mix.lasher ?? 0) > 0 && Math.random() < 0.6) out.push('lasher');
+      if ((mix.prism ?? 0) > 0 && Math.random() < 0.7) out.push('prism');
       small(def.id === 'seedbed' ? 3 : 3 + idx * 2);
     } else {
-      if (def.mix.brute > 0 && Math.random() < 0.5) out.push('brute');
+      if (mix.brute > 0 && Math.random() < 0.5) out.push('brute');
+      if ((mix.prism ?? 0) > 0 && Math.random() < 0.35) out.push('prism');
       small(def.id === 'seedbed' ? 2 : 3 + idx);
     }
     return out;
+  }
+
+  /** Weighted pick among `kinds` by the stratum's mix (kinds with no share are skipped; falls back to the first). */
+  private pickKind<K extends RoamKind>(kinds: readonly K[], rnd: () => number): K {
+    const mix = this.def.mix;
+    const live = kinds.filter((k) => (mix[k] ?? 0) > 0);
+    if (!live.length) return kinds[0];
+    let roll = rnd() * live.reduce((a, k) => a + (mix[k] ?? 0), 0);
+    for (const k of live) {
+      roll -= mix[k] ?? 0;
+      if (roll <= 0) return k;
+    }
+    return live[live.length - 1];
   }
 
   private fadeCamps(dt: number) {
@@ -1073,6 +1140,7 @@ export class Game {
       this.audio.sfx('ready');
       this.audio.sfx('plant');
       this.ui.toast(`${c.spec.name} purged`);
+      this.punch('camp', `${c.spec.name} purged`);
       this.missionProgress('pool', 1, c.spec.x, c.spec.z, c.spec.id);
       this.dropLoot(c.spec.x, c.spec.z, 'cache');
       this.plantEcho(c.spec.x, c.spec.z, 'node');
@@ -1120,7 +1188,9 @@ export class Game {
   }
 
   private makeEnemy(kind: EnemyKind, x: number, z: number, fromEvent: boolean, variant: BossVariant = 'warden'): Enemy {
-    const e = new Enemy(kind, x, z, this.diff, this.world.terrain.heightAt(x, z), variant);
+    // elites grow likelier as the Director's threat climbs
+    const elite = Math.random() < (this.def.elite ?? 0) * (0.6 + 0.4 * (this.director?.out.threat ?? 1));
+    const e = new Enemy(kind, x, z, this.diff, this.world.terrain.heightAt(x, z), variant, elite);
     e.fromEvent = fromEvent;
     this.enemies.push(e);
     this.gfx.scene.add(e.group);
@@ -1138,7 +1208,7 @@ export class Game {
 
   spawnBudget(budget: number, cx: number, cz: number, fromEvent: boolean) {
     const mix = this.def.mix;
-    const kinds = (['mite', 'spitter', 'brute', 'drone'] as const).filter((k) => (mix[k] ?? 0) > 0);
+    const kinds = ROAM_KINDS.filter((k) => (mix[k] ?? 0) > 0);
     if (!kinds.length) return;
     let left = budget;
     let guard = 0;
@@ -1205,18 +1275,7 @@ export class Game {
         this.queueSpawn('drone', x, z, false);
         return;
       }
-      const kinds = (['mite', 'spitter'] as const).filter((k) => mix[k] > 0);
-      const total = kinds.reduce((s, k) => s + mix[k], 0);
-      let roll = rnd() * total;
-      let kind = kinds[0];
-      for (const k of kinds) {
-        roll -= mix[k];
-        if (roll <= 0) {
-          kind = k;
-          break;
-        }
-      }
-      this.queueSpawn(kind, x, z, false);
+      this.queueSpawn(this.pickKind(['mite', 'spitter', 'stalker', 'bloater', 'prism', 'lasher'], rnd), x, z, false);
       return;
     }
   }
@@ -1298,6 +1357,7 @@ export class Game {
     this.gainXp(70 + this.def.index * 20);
     this.audio.sfx('ready');
     this.ui.toast(`Mission complete — ${m.title} · +${m.reward} Void Crystals`);
+    this.punch('mission', `Mission complete — ${m.title}`);
     this.director.stimulate(this.player.x, this.player.z, this.world.radius, 1.2);
     this.saveRun();
   }
@@ -1350,6 +1410,7 @@ export class Game {
     this.player.res = Math.min(this.derived.maxRes, this.player.res + 50);
     this.missionProgress('contact', 1, node.pos.x, node.pos.z);
     this.ui.toast(`Resonance Contact linked · ${this.contactsLinked}/${total} · Core Resonator ${Math.round((this.contactsLinked / total) * 100)}%`);
+    this.punch('contact', `Resonance Contact linked (${this.contactsLinked}/${total})`);
     if (this.contactsLinked >= total) this.wakeConstruct();
     this.saveRun();
   }
@@ -1499,6 +1560,7 @@ export class Game {
     p.hp = 0;
     p.dead = true;
     this.mode = 'dead';
+    this.punch('death', `Fell in ${this.def.name} — the mycelium caught the thread`);
     this.deathTimer = 0;
     this.particles.burst(new THREE.Vector3(p.x, p.y + 1, p.z), BOLT_COLORS.base, 60, 12, 0.7, 1.2);
     this.particles.ring(new THREE.Vector3(p.x, p.y + 1, p.z), BOLT_COLORS.base, 40, 14, 0.6, 1);
@@ -1564,6 +1626,7 @@ export class Game {
       const p = this.player;
       p.hp = Math.min(this.derived.maxHp, p.hp + this.derived.maxHp * 0.35);
       this.ui.toast(`LEVEL ${this.run.level} — skill point earned [Tab]`);
+      this.punch('level', `Reached level ${this.run.level}`);
       this.audio.sfx('node');
       this.particles.ring(new THREE.Vector3(p.x, p.y + 0.6, p.z), new THREE.Color(0xffc14a).multiplyScalar(3), 40, 9, 0.6, 0.9);
     }
@@ -1719,6 +1782,7 @@ export class Game {
   }
   bossDefeated(e: Enemy) {
     this.bossDown = true;
+    this.punch('boss', e.variant === 'construct' ? 'The Void-Infused Construct kneels' : 'The Null Warden falls');
     if (e.variant === 'construct') {
       this.constructDefeated(e);
       return;
@@ -1894,6 +1958,7 @@ export class Game {
     p.res = this.derived.maxRes;
     this.gainXp(100);
     this.ui.toast('Pylon purged — fast travel unlocked [M]');
+    this.punch('pylon', `Pylon purged in ${this.def.name}`);
   }
 
   private completeNode(node: MemoryNode) {
@@ -1939,6 +2004,8 @@ export class Game {
   private applyRemembrance(c: Remembrance, node: MemoryNode) {
     const p = this.player;
     this.run.remembrances.push(c);
+    const nth = `Remembrance ${this.run.remembrances.length} of ${TOTAL_REMEMBRANCES}`;
+    this.punch('remembrance', c === 'purify' ? `${nth} purified` : `${nth} embraced — the Null spoke through it`);
     if (c === 'purify') this.telemetry.purify++;
     else this.telemetry.embrace++;
     const pos = new THREE.Vector3(node.pos.x, node.pos.y + 3, node.pos.z);
@@ -1997,6 +2064,7 @@ export class Game {
     this.run.tiers[c.affinity] = Math.min(3, this.run.tiers[c.affinity] + 1);
     this.audio.sfx('choice');
     const tier = this.run.tiers[c.affinity];
+    this.punch('choice', `Chose “${c.title}” — ${AFFINITY_META[c.affinity].name} ${'I'.repeat(tier)}`);
     this.ui.toast(`${AFFINITY_META[c.affinity].name} ${'I'.repeat(tier)} — ${PERKS[c.affinity][tier - 1]}`);
     this.exitStratum(c);
   }
@@ -2024,9 +2092,11 @@ export class Game {
       time: this.stats.time,
     });
     this.story = composeStory(this.run);
+    this.punch('ending', `Cycle ${this.run.cycle} complete — ${this.story.title}`);
     const lib = this.library();
     lib.push(toLibraryEntry(this.run, this.story));
     store.set(LIB_KEY, lib.slice(-30));
+    this.deck.push(buildStorycard(this.run));
     store.del(SAVE_KEY);
   }
 

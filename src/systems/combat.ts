@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import type { Game } from '../game';
 import type { Enemy } from '../entities/enemies';
-import { enemyXp, WEAK_POINT_MUL, SPIKE_ARMOUR_MUL } from '../entities/enemies';
+import { ELITE, enemyXp, WEAK_POINT_MUL, SPIKE_ARMOUR_MUL } from '../entities/enemies';
+import { bloaterBurst } from '../entities/brood';
 import type { Player } from '../entities/player';
 import { BOLT_COLORS, type Bolt } from '../entities/projectiles';
 import { AbilityFx } from '../entities/abilities';
@@ -43,6 +44,7 @@ export class Combat {
   shieldT = 0;
   shieldMax = 70;
   private armourHintT = 0;
+  private prismHintT = 0;
   private ghosts: Ghost[] = [];
   private jobs: SpikeJob[] = [];
 
@@ -232,12 +234,26 @@ export class Combat {
       e.st = 1.4;
     }
     e.wake(g);
+    if (e.kind === 'stalker' && (e.state === 'leap' || e.state === 'recover')) {
+      // caught mid-pounce or sprawled from the landing: the lattice cracks open
+      dmgIn *= 1.6;
+      o.crit = true;
+    }
+    if (e.shieldT > 0) {
+      // refracted by a Fractal Prism: most of the blow scatters off as light
+      dmgIn *= 0.35;
+      g.particles.burst(_v.set(e.x, e.y, e.z), new THREE.Color(0x9ae8ff).multiplyScalar(2.5), 5, 6, 0.25, 0.3);
+      if (g.time > this.prismHintT) {
+        this.prismHintT = g.time + 8;
+        g.ui.toast('Refracted. Break the Fractal Prism first');
+      }
+    }
     const dmg = dmgIn * this.D.voidMul;
     e.hp -= dmg;
     e.flash = 0.09;
     if (!o.echo) g.stats.hits++;
     const l = Math.hypot(dirx, dirz) || 1;
-    const k = e.kind === 'boss' ? 0 : (o.knock ?? 4) * (e.kind === 'brute' ? 0.3 : 1);
+    const k = e.kind === 'boss' || e.kind === 'lasher' ? 0 : (o.knock ?? 4) * (e.kind === 'brute' ? 0.3 : 1);
     e.vx += (dirx / l) * k;
     e.vz += (dirz / l) * k;
     if (o.slow) {
@@ -263,6 +279,17 @@ export class Combat {
     if (e.dead) return;
     e.dead = true;
     const pos = new THREE.Vector3(e.x, e.y, e.z);
+    if (e.kind === 'bloater') bloaterBurst(e, g);
+    if (e.aux.self) {
+      // a Bloater that burst on its own: no reward, but it still counts toward clearing its camp
+      g.onEnemyKilled(e);
+      return;
+    }
+    if (e.kind === 'prism') {
+      g.particles.ring(pos, new THREE.Color(0xd8c8ff).multiplyScalar(3), 40, 14, 0.6, 0.7);
+      g.world.props.debris.burst('shard', e.x, e.y, e.z, 18, 10, new THREE.Color(0xb6a0ff), 1.1);
+      g.audio.sfx('kill', 1.4);
+    }
     g.stratumKills++;
     g.run.kills++;
     this.gainRes(e.value * 3.5);
@@ -274,7 +301,11 @@ export class Combat {
       g.world.props.debris.burst('rubble', e.x, e.y + 1, e.z, e.kind === 'boss' ? 26 : 12, 8, VOIDBARK, e.kind === 'boss' ? 2.2 : 1.4);
       g.world.props.debris.burst('shard', e.x, e.y + 1.5, e.z, 8, 9, HOT, 1.2);
     }
-    g.gainXp(enemyXp(e.kind));
+    g.gainXp(Math.round(enemyXp(e.kind) * (e.elite ? ELITE.xp : 1)));
+    if (e.elite) {
+      g.dropLoot(e.x, e.z, 'kill');
+      g.dropCrystals(e.x, e.z, 1);
+    }
     g.onEnemyKilled(e);
     if (e.kind === 'boss') {
       g.bossDefeated(e);

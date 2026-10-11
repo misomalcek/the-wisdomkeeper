@@ -28,6 +28,9 @@ const JOBS = {
   resonanceContact: { mod: 'src/assets/propModels.ts', geo: 'contactPadGeometry', cell: 0.016, tris: 40000, out: 'models/resonance-contact.glb' },
   datastreamDais: { mod: 'src/assets/propModels.ts', geo: 'datastreamDaisGeometry', cell: 0.012, tris: 24000, out: 'models/datastream-dais.glb' },
   dataPylon: { mod: 'src/assets/nullModels.ts', geo: 'dataPylonGeometry', cell: 0.014, tris: 40000, out: 'models/data-pylon.glb' },
+  latticeStalker: { mod: 'src/assets/broodModels.ts', geo: 'stalkerGeometry', rig: 'buildStalkerRig', cell: 0.008, tris: 30000, out: 'models/lattice-stalker.glb' },
+  sporeBloater: { mod: 'src/assets/broodModels.ts', geo: 'bloaterGeometry', cell: 0.008, tris: 24000, out: 'models/spore-bloater.glb' },
+  rootLasher: { mod: 'src/assets/broodModels.ts', geo: 'lasherGeometry', rig: 'buildLasherRig', cell: 0.01, tris: 36000, out: 'models/root-lasher.glb' },
 };
 
 async function bake(name, job) {

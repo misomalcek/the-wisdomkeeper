@@ -26,8 +26,13 @@ export interface StratumDef {
   nodeLabel: string;
   /** Target number of roaming enemies. */
   ambient: number;
-  /** Ambient/encounter mix; `drone` is the Null-Sentry Drone share (Act II onward). */
-  mix: { mite: number; spitter: number; brute: number; drone?: number };
+  /**
+   * Ambient/encounter mix; `drone` is the Null-Sentry Drone share (Act II onward). The second brood: `stalker`
+   * (Lattice Stalker), `bloater` (Spore Bloater), `prism` (Fractal Prism) and `lasher` (Root Lasher).
+   */
+  mix: { mite: number; spitter: number; brute: number; drone?: number; stalker?: number; bloater?: number; prism?: number; lasher?: number };
+  /** Chance that a roaming foe spawns as an elite (Ascendant). */
+  elite?: number;
   waveBase: number;
   intro: string[];
   fragments: string[];
@@ -69,7 +74,7 @@ export const STRATA: StratumDef[] = [
     nodes: 1,
     nodeLabel: 'The First Seed',
     ambient: 2,
-    mix: { mite: 1, spitter: 0, brute: 0 },
+    mix: { mite: 1, spitter: 0, brute: 0, bloater: 0.3 },
     waveBase: 4,
     objective: 'Wake the First Seed',
     intro: [
@@ -124,7 +129,8 @@ export const STRATA: StratumDef[] = [
     nodes: 3,
     nodeLabel: 'Memory Node',
     ambient: 4,
-    mix: { mite: 1, spitter: 0.6, brute: 0.12, drone: 0.1 },
+    mix: { mite: 1, spitter: 0.6, brute: 0.12, drone: 0.1, stalker: 0.35, bloater: 0.35, lasher: 0.12 },
+    elite: 0.04,
     waveBase: 5,
     objective: 'Listen to the three Memory Nodes',
     intro: [
@@ -181,7 +187,8 @@ export const STRATA: StratumDef[] = [
     nodes: 3,
     nodeLabel: 'Remembrance',
     ambient: 7,
-    mix: { mite: 1, spitter: 0.8, brute: 0.4, drone: 0.3 },
+    mix: { mite: 0.9, spitter: 0.7, brute: 0.4, drone: 0.3, stalker: 0.55, bloater: 0.4, prism: 0.25, lasher: 0.3 },
+    elite: 0.07,
     waveBase: 7,
     objective: 'Wake the three Remembrances',
     intro: [
@@ -238,7 +245,8 @@ export const STRATA: StratumDef[] = [
     nodes: 4,
     nodeLabel: 'Resonance Contact',
     ambient: 8,
-    mix: { mite: 1, spitter: 0.7, brute: 0.5, drone: 0.6 },
+    mix: { mite: 0.8, spitter: 0.6, brute: 0.5, drone: 0.6, stalker: 0.6, bloater: 0.45, prism: 0.35, lasher: 0.4 },
+    elite: 0.1,
     waveBase: 7,
     contacts: 'construct',
     objective: 'Reach the Central Pylon',
@@ -276,7 +284,8 @@ export const STRATA: StratumDef[] = [
     nodes: 0,
     nodeLabel: '',
     ambient: 0,
-    mix: { mite: 1, spitter: 1, brute: 0.4 },
+    mix: { mite: 1, spitter: 1, brute: 0.4, stalker: 0.5, bloater: 0.5, prism: 0.3 },
+    elite: 0.12,
     waveBase: 4,
     boss: true,
     objective: 'Answer the Null Warden',

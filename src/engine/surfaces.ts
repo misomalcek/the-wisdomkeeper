@@ -1,0 +1,129 @@
+import { MeshStandardNodeMaterial } from 'three/webgpu';
+import * as THREE from 'three';
+import {
+  texture, positionGeometry, positionWorld, normalWorld, float, vec2, vec3, mix, smoothstep, abs, sin, max, pow, clamp,
+  materialColor, diffuseColor, cameraPosition, normalize, atan, positionView, color,
+} from 'three/tsl';
+import { proceduralBump, worldTime, floraGlow, type N } from './materials';
+import { fractalTexture, surfaceDetail, surfaces } from './proctex';
+
+/**
+ * World surface materials built on the procedural textures (engine/proctex): bark, stone with fractal inlays,
+ * fibrous stems, spotted caps, grass, and crystal with a Julia set refracting inside it. All sample in world
+ * space (biplanar), so instanced scaling never stretches them, and all multiply into the instance colour so the
+ * flora keeps its per-instance tints. `surfaceDetail` (from the render quality) decides whether micro-relief is
+ * bump-mapped: the low tier skips the derivative work entirely.
+ */
+
+/**
+ * World-space triplanar sample: ZY, XZ and XY projections blended by the sharpened normal, so walls, tops and
+ * tilted branches all read the texture at its true scale. `sy` scales the vertical axis on the side projections.
+ */
+export function biplanar(tex: THREE.Texture, p: N, n: N, sx: number, sy: number): N {
+  const an: N = pow(abs(n), vec3(4));
+  const wsum: N = an.x.add(an.y).add(an.z).add(1e-4);
+  const a: N = texture(tex, vec2(p.z.mul(sx), p.y.mul(sy)));
+  const t: N = texture(tex, vec2(p.x.mul(sx), p.z.mul(sx)));
+  const b: N = texture(tex, vec2(p.x.mul(sx), p.y.mul(sy)));
+  return a.mul(an.x).add(t.mul(an.y)).add(b.mul(an.z)).div(wsum);
+}
+
+/** Fade (1 near → 0 far) for detail that only matters close to the camera. */
+export const nearFade = (a: number, b: number): N => float(1).sub(smoothstep(a, b, positionView.length()));
+
+/** Bump-map micro relief, faded out with distance (minified relief only sparkles). Skipped on the low tier. */
+const bump = (m: MeshStandardNodeMaterial, h: N, k: number) => {
+  if (surfaceDetail > 0) m.normalNode = proceduralBump(h.mul(nearFade(12, 40)), k);
+};
+
+/** Bark: fibres and furrowed plates, moss settling on the upper sides. */
+export function barkMaterial(o: { roughness?: number; side?: THREE.Side; moss?: number } = {}) {
+  const m = new MeshStandardNodeMaterial({ roughness: o.roughness ?? 0.78, metalness: 0.04, side: o.side ?? THREE.FrontSide });
+  const b: N = biplanar(surfaces.bark, positionWorld, normalWorld, 0.55, 0.22);
+  const up: N = smoothstep(0.1, 0.7, normalWorld.y);
+  const moss: N = b.a.mul(up).mul(o.moss ?? 0.8);
+  const tone: N = float(0.6).add(b.r.mul(0.35)).add(b.b.sub(0.5).mul(0.5)).mul(float(1).sub(b.g.mul(0.6)));
+  m.colorNode = materialColor.mul(tone).mul(mix(vec3(1), vec3(0.55, 1.15, 0.7), moss));
+  m.roughnessNode = clamp(float(o.roughness ?? 0.78).add(b.g.mul(0.15)).add(moss.mul(0.1)), 0, 1);
+  bump(m, b.r.mul(0.35).sub(b.g.mul(0.9)).add(moss.mul(0.3)), 0.05);
+  return m;
+}
+
+/**
+ * Cut stone: coursed blocks with chipped arrises, fissures and lichen, and a fractal glyph inlaid in each face
+ * (the Mandelbrot set or a Julia set, picked per block row), its boundary lit in `glyph` and breathing slowly.
+ */
+export function stoneMaterial(glyph: THREE.ColorRepresentation, o: { roughness?: number; metalness?: number; scale?: number; inlay?: number; flatShading?: boolean } = {}) {
+  const m = new MeshStandardNodeMaterial({ roughness: o.roughness ?? 0.6, metalness: o.metalness ?? 0.15, flatShading: o.flatShading ?? false });
+  const k = o.scale ?? 0.45;
+  const s: N = biplanar(surfaces.stone, positionWorld, normalWorld, k, k);
+  const tone: N = s.g.mul(0.6).add(0.55).mul(float(1).sub(s.r.mul(0.55))).mul(float(1).sub(s.b.mul(0.5)));
+  const lichen: N = s.a.mul(smoothstep(-0.2, 0.6, normalWorld.y)).mul(0.6);
+  m.colorNode = materialColor.mul(tone).mul(mix(vec3(1), vec3(0.75, 1.1, 0.8), lichen));
+  m.roughnessNode = clamp(float(o.roughness ?? 0.6).add(s.r.mul(0.25)).sub(s.g.sub(0.5).mul(0.2)), 0, 1);
+  bump(m, s.g.mul(0.3).sub(s.r.mul(0.8)).sub(s.b.mul(0.6)), 0.06);
+  const inlay = o.inlay ?? 1;
+  if (inlay > 0) {
+    // glyphs repeat every ~4.5 m along each face, rotated per projection so neighbours differ
+    const w: N = abs(normalWorld.x).div(abs(normalWorld.x).add(abs(normalWorld.z)).add(1e-4));
+    const fu: N = mix(positionWorld.x, positionWorld.z, w);
+    const g: N = texture(fractalTexture(), vec2(fu.mul(0.22), positionWorld.y.mul(0.22)));
+    const pick: N = smoothstep(0.4, 0.6, sin(positionWorld.y.mul(0.7).add(fu.mul(0.3))));
+    const line: N = mix(g.r, g.g, pick);
+    const breathe: N = sin(worldTime.mul(1.1).add(fu.mul(0.4)).add(positionWorld.y.mul(0.3))).mul(0.35).add(0.65);
+    const glyphC: N = color(new THREE.Color(glyph));
+    const side: N = smoothstep(0.75, 0.35, abs(normalWorld.y));
+    m.emissiveNode = glyphC.mul(pow(line, float(1.5)).mul(breathe).mul(side).mul(0.55 * inlay)).mul(floraGlow).mul(nearFade(40, 110));
+  }
+  return m;
+}
+
+/** Mushroom stem: vertical fibres and a ring of darker gill-shadow under the cap. */
+export function stemMaterial() {
+  const m = new MeshStandardNodeMaterial({ roughness: 0.8, metalness: 0 });
+  const b: N = biplanar(surfaces.bark, positionWorld.mul(vec3(2.2, 0.8, 2.2)), normalWorld, 1, 0.6);
+  const top: N = smoothstep(0.75, 1, positionGeometry.y);
+  m.colorNode = materialColor.mul(float(0.75).add(b.r.mul(0.35)).sub(b.g.mul(0.2))).mul(float(1).sub(top.mul(0.45)));
+  bump(m, b.r, 0.02);
+  return m;
+}
+
+/**
+ * Mushroom cap (unit hemisphere): Voronoi spots that glow a little brighter than the hide, radial gills on the
+ * underside, a lit rim. `k` is the overall self-light as in `selfLit`.
+ */
+export function capMaterial(k: number) {
+  const m = new MeshStandardNodeMaterial({ roughness: 0.55, metalness: 0, side: THREE.DoubleSide });
+  const p: N = positionGeometry;
+  const spots: N = texture(surfaces.ground, p.xz.mul(0.45).add(p.y.mul(0.2))).g;
+  const ang: N = atan(p.z, p.x);
+  const gills: N = abs(sin(ang.mul(42))).oneMinus().pow(float(3)).mul(smoothstep(0.25, 0.02, p.y));
+  const rim: N = smoothstep(0.12, 0.0, p.y);
+  m.colorNode = materialColor.mul(float(0.82).add(spots.mul(0.4)).sub(gills.mul(0.35)));
+  m.emissiveNode = diffuseColor.rgb.mul(float(k).mul(float(0.7).add(spots.mul(1.6)).add(rim.mul(0.9)))).mul(floraGlow.mul(0.5).add(0.5));
+  return m;
+}
+
+/** Grass tufts: dark at the root, lit at the tip, with blade striations. */
+export function tuftMaterial(k: number) {
+  const m = new MeshStandardNodeMaterial({ roughness: 0.7, metalness: 0 });
+  const h: N = clamp(positionGeometry.y.mul(1.3), 0, 1);
+  const streak: N = abs(sin(atan(positionGeometry.z, positionGeometry.x).mul(6).add(positionWorld.x.mul(3)))).mul(0.25).add(0.75);
+  m.colorNode = materialColor.mul(mix(float(0.35), float(1.15), h)).mul(streak);
+  m.emissiveNode = diffuseColor.rgb.mul(float(k).mul(pow(h, float(2.5)).mul(1.8).add(0.15))).mul(floraGlow);
+  return m;
+}
+
+/**
+ * Crystal: a Julia set seen through the facets. The glyph is sampled along the view ray with a parallax offset,
+ * so the fractal seems to hang inside the stone and shifts as the camera moves.
+ */
+export function crystalMaterial(k: number, o: { roughness?: number; metalness?: number; flatShading?: boolean } = {}) {
+  const m = new MeshStandardNodeMaterial({ roughness: o.roughness ?? 0.1, metalness: o.metalness ?? 0.2, flatShading: o.flatShading ?? true });
+  const v: N = normalize(cameraPosition.sub(positionWorld));
+  const uv: N = positionWorld.xz.add(positionWorld.y.mul(0.6)).mul(0.25).add(v.xz.mul(0.35));
+  const g: N = texture(fractalTexture(), uv);
+  const inner: N = max(g.g, g.r.mul(0.6));
+  m.emissiveNode = diffuseColor.rgb.mul(float(k).mul(float(0.55).add(inner.mul(1.4)))).mul(floraGlow.mul(0.4).add(0.6));
+  return m;
+}

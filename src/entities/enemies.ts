@@ -12,6 +12,7 @@ import { miteGeometry, spitterGeometry } from '../assets/minorModels';
 import { CB, CONSTRUCT_CORE, buildConstructRig, constructGeometry, dataPylonGeometry, droneGeometry, ringGeometry } from '../assets/nullModels';
 import type { BossVariant, EnemyKind } from '../types';
 import { TAU, angleDiff, clamp, damp } from '../util/math';
+import { BROOD_HOVER, animateBloater, animateLasher, animatePrism, animateStalker, bloaterStep, buildBloater, buildLasher, buildPrism, buildStalker, lasherDepth, lasherStep, prismStep, stalkerStep } from './brood';
 
 let nextId = 1;
 const HOT = new THREE.Color(0xff3b7a);
@@ -35,14 +36,28 @@ const TABLE: Record<EnemyKind, Stats> = {
   spitter: { hp: 46, speed: 5.2, radius: 0.85, dmg: 13, value: 2, foot: 0, xp: 7 },
   brute: { hp: 260, speed: 4.2, radius: 2.1, dmg: 22, value: 5, foot: 1.9, xp: 30 },
   drone: { hp: 70, speed: 7.5, radius: 1.0, dmg: 14, value: 3, foot: 0, xp: 12 },
+  stalker: { hp: 64, speed: 9.5, radius: 1.1, dmg: 15, value: 2, foot: 0.95, xp: 10 },
+  bloater: { hp: 38, speed: 3.4, radius: 1.1, dmg: 30, value: 1, foot: 0, xp: 6 },
+  prism: { hp: 120, speed: 4.6, radius: 1.3, dmg: 11, value: 3, foot: 0, xp: 18 },
+  lasher: { hp: 150, speed: 0, radius: 1.3, dmg: 18, value: 3, foot: 0, xp: 16 },
   pylon: { hp: 420, speed: 0, radius: 1.5, dmg: 0, value: 0, foot: 0, xp: 25 },
   boss: { hp: 6800, speed: 4.4, radius: 4.4, dmg: 24, value: 0, foot: 4.8, xp: 600 },
 };
-export const ENEMY_COST: Record<'mite' | 'spitter' | 'brute' | 'drone', number> = { mite: 1, spitter: 2, brute: 5, drone: 3 };
+/** Kinds the encounter and ambient spawners draw from, and what each costs from a spawn budget. */
+export type RoamKind = 'mite' | 'spitter' | 'brute' | 'drone' | 'stalker' | 'bloater' | 'prism' | 'lasher';
+export const ROAM_KINDS: readonly RoamKind[] = ['mite', 'spitter', 'brute', 'drone', 'stalker', 'bloater', 'prism', 'lasher'];
+export const ENEMY_COST: Record<RoamKind, number> = { mite: 1, spitter: 2, brute: 5, drone: 3, stalker: 2, bloater: 2, prism: 4, lasher: 3 };
 export const ENEMY_NAME: Record<EnemyKind, string> = {
-  mite: 'Null Sprite', spitter: 'Thorn Caster', brute: 'Void-Root Fiend', drone: 'Null-Sentry Drone', pylon: 'Data-River Pylon', boss: 'The Null Warden',
+  mite: 'Null Sprite', spitter: 'Thorn Caster', brute: 'Void-Root Fiend', drone: 'Null-Sentry Drone', stalker: 'Lattice Stalker',
+  bloater: 'Spore Bloater', prism: 'Fractal Prism', lasher: 'Root Lasher', pylon: 'Data-River Pylon', boss: 'The Null Warden',
 };
-export const enemyName = (e: { kind: EnemyKind; variant: BossVariant }) => (e.kind === 'boss' && e.variant === 'construct' ? 'The Void-Infused Construct' : ENEMY_NAME[e.kind]);
+export const enemyName = (e: { kind: EnemyKind; variant: BossVariant; elite?: boolean }) =>
+  e.kind === 'boss' && e.variant === 'construct' ? 'The Void-Infused Construct' : (e.elite ? 'Ascendant ' : '') + ENEMY_NAME[e.kind];
+/** Elites: tougher, harder-hitting, larger, crowned with a gold ring, and worth more. */
+export const ELITE = { hp: 2.2, dmg: 1.25, size: 1.22, xp: 2.5 } as const;
+/** Floating kinds and the height they hover at above the ground. */
+const HOVER: Partial<Record<EnemyKind, number>> = { mite: 1.6, spitter: 2.6, drone: 5, ...BROOD_HOVER };
+const floats = (k: EnemyKind) => HOVER[k] !== undefined;
 /** Blueprint weak-point multiplier (Chest_Core_Bone ×2.5) and the bone-spike armour's rear reduction. */
 export const WEAK_POINT_MUL = 2.5;
 export const SPIKE_ARMOUR_MUL = 0.5;
@@ -150,8 +165,20 @@ export class Enemy {
   beam?: THREE.Mesh;
   beamMat?: MeshBasicNodeMaterial;
   tetherHit = false;
+  /** Per-kind scratch state for the second brood (leap arcs, burrow depth, lash progress). */
+  aux: Record<string, number> = {};
+  /** Skeleton bones for the rigged second-brood kinds. */
+  rig?: THREE.Bone[];
+  /** A Stalker mid-pounce: its height follows the leap arc, not the ground. */
+  airborne = false;
+  /** Fractal Prism: link beams and the allies they shelter; `shieldT` > 0 while a Prism shelters this enemy. */
+  links: THREE.Mesh[] = [];
+  linked: Enemy[] = [];
+  shieldT = 0;
+  readonly elite: boolean;
+  private eliteRing?: THREE.Mesh;
 
-  constructor(kind: EnemyKind, x: number, z: number, diff: number, groundY: number, variant: BossVariant = 'warden') {
+  constructor(kind: EnemyKind, x: number, z: number, diff: number, groundY: number, variant: BossVariant = 'warden', elite = false) {
     this.kind = kind;
     this.variant = variant;
     const s = TABLE[kind];
@@ -166,8 +193,8 @@ export class Enemy {
     this.z = z;
     this.homeX = x;
     this.homeZ = z;
-    const hover = kind === 'mite' ? 1.6 : kind === 'spitter' ? 2.6 : kind === 'drone' ? 5 : s.foot;
-    this.y = groundY + hover;
+    this.elite = elite && kind !== 'boss' && kind !== 'pylon';
+    this.y = groundY + (HOVER[kind] ?? s.foot);
     this.group.add(this.body);
     this.edgeMat = glowLine({ color: HOT.clone().multiplyScalar(2.2) });
 
@@ -177,6 +204,14 @@ export class Enemy {
       this.buildSwarm('spitter');
     } else if (kind === 'drone') {
       this.buildDrone();
+    } else if (kind === 'stalker') {
+      buildStalker(this);
+    } else if (kind === 'bloater') {
+      buildBloater(this);
+    } else if (kind === 'prism') {
+      buildPrism(this);
+    } else if (kind === 'lasher') {
+      buildLasher(this);
     } else if (kind === 'pylon') {
       this.buildPylon();
     } else if (kind === 'boss' && variant === 'construct') {
@@ -208,15 +243,37 @@ export class Enemy {
         this.makeBeam(0x9a3bff);
       }
     }
-    if (kind !== 'brute' && kind !== 'boss') this.group.scale.setScalar(0.01);
-    else this.group.scale.setScalar(0.01);
+    this.group.scale.setScalar(0.01);
+    if (this.elite) this.makeElite();
     this.yawFace = Math.random() * TAU;
     this.group.traverse((o) => {
       if ((o as THREE.Mesh).isMesh && o !== this.bar && o !== this.barBg) o.castShadow = true;
     });
   }
 
-  private makeBar(y: number) {
+  private makeElite() {
+    this.hp = this.maxHp = Math.round(this.maxHp * ELITE.hp);
+    this.dmg = Math.round(this.dmg * ELITE.dmg);
+    this.value *= 2;
+    this.radius *= 1.12;
+    this.scale *= ELITE.size;
+    this.body.scale.multiplyScalar(ELITE.size);
+    const m = glowBasic({ color: new THREE.Color(0xffd27a).multiplyScalar(2.4) });
+    this.extraMats.push(m);
+    this.eliteRing = new THREE.Mesh(ringGeometry(this.radius * 1.15, 0.035), m);
+    this.eliteRing.rotation.x = Math.PI / 2;
+    this.eliteRing.position.y = this.kind === 'brute' ? this.foot * 1.25 * ELITE.size + 1.2 : this.kind === 'stalker' || this.kind === 'lasher' ? 1.6 : 0;
+    this.group.add(this.eliteRing);
+  }
+
+  /** Spin the elite crown. */
+  spinCrown(dt: number) {
+    if (!this.eliteRing) return;
+    this.eliteRing.rotation.z += dt * 1.8;
+    this.eliteRing.rotation.x = Math.PI / 2 + Math.sin(this.phaseAnim * 0.5 + this.id) * 0.15;
+  }
+
+  makeBar(y: number) {
     this.barBg = new THREE.Mesh(GEO.bar, glowBasic({ color: 0x1a0a12, transparent: true, opacity: 0.8, depthWrite: false }));
     this.bar = new THREE.Mesh(GEO.bar, glowBasic({ color: new THREE.Color(0xff3b7a).multiplyScalar(1.4), depthWrite: false }));
     this.extraMats.push(this.barBg.material as THREE.Material, this.bar.material as THREE.Material);
@@ -229,7 +286,7 @@ export class Enemy {
   }
 
   /** A unit-length beam along +Z from the body origin; scaled to length while telegraphing. */
-  private makeBeam(color: number) {
+  makeBeam(color: number) {
     this.beamMat = glowBasic({ color: new THREE.Color(color).multiplyScalar(2.6), transparent: true, opacity: 0.85, depthWrite: false, blending: THREE.AdditiveBlending });
     this.beam = new THREE.Mesh(GEO.beam, this.beamMat);
     this.beam.visible = false;
@@ -248,7 +305,7 @@ export class Enemy {
     this.beam.scale.set(width, width, len / Math.max(this.group.scale.x, 0.01));
   }
 
-  private nullMaterial(look: { body: number; armor: number; vein: number; accent: number; dark: number }, mottle: number, crackGlow: number) {
+  nullMaterial(look: { body: number; armor: number; vein: number; accent: number; dark: number }, mottle: number, crackGlow: number) {
     const u: HeroUniforms = { ...heroUniforms(), uT: this.uT, uHurt: this.uHurt };
     applyLook(u, look);
     const m = sculptMaterial(u, { mottle, crackGlow });
@@ -386,7 +443,7 @@ export class Enemy {
     this.body.scale.setScalar(this.scale);
   }
 
-  private makeTele(width: number, len: number) {
+  makeTele(width: number, len: number) {
     this.teleMat = glowBasic({ color: new THREE.Color(0xff3b4a).multiplyScalar(1.6), transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
     this.tele = new THREE.Mesh(GEO.tele, this.teleMat);
     this.tele.scale.set(width, 1, len);
@@ -400,6 +457,8 @@ export class Enemy {
       const f = CONSTRUCT_CORE.z;
       return out.set(this.x + Math.sin(this.yawFace) * f, this.group.position.y + this.torsoY + CONSTRUCT_CORE.y, this.z + Math.cos(this.yawFace) * f);
     }
+    if (this.kind === 'lasher') return out.set(this.x, this.group.position.y + 3.0 * this.scale, this.z);
+    if (this.kind === 'stalker') return out.set(this.x, this.y, this.z);
     if (this.kind === 'brute') {
       const f = FIEND_CORE.z * this.scale;
       return out.set(this.x + Math.sin(this.yawFace) * f, this.group.position.y + (this.torsoY + FIEND_CORE.y) * this.scale, this.z + Math.cos(this.yawFace) * f);
@@ -414,6 +473,7 @@ export class Enemy {
   }
 
   dispose() {
+    for (const l of this.links) l.removeFromParent();
     this.coreMat.dispose();
     this.edgeMat.dispose();
     this.teleMat?.dispose();
@@ -448,6 +508,7 @@ export function updateEnemy(e: Enemy, g: Game, dt: number) {
   e.contactCD -= dt;
   e.slowT -= dt;
   e.rootT -= dt;
+  e.shieldT -= dt;
   const ts = (e.slowT > 0 ? e.slowF : 1) * g.enemyTimeScale * (e.rootT > 0 ? 0 : 1);
   const sdt = dt * ts;
 
@@ -461,7 +522,7 @@ export function updateEnemy(e: Enemy, g: Game, dt: number) {
   const gh = terrain.heightAt(e.x, e.z);
   if (e.idle) idleStep(e, g, dt, distXZ, gh);
   else if (e.spawnT >= 1 && !p.dead) aiStep(e, g, sdt, dt, gh);
-  else if (p.dead) e.y = damp(e.y, gh + (e.kind === 'mite' ? 1.6 : e.kind === 'spitter' ? 2.6 : e.kind === 'drone' ? 5 : e.foot), 4, dt);
+  else if (p.dead) e.y = damp(e.y, gh + (HOVER[e.kind] ?? e.foot), 4, dt);
 
   // keep inside the arena and out of solid scenery
   const R = g.world.radius * 0.99;
@@ -470,7 +531,7 @@ export function updateEnemy(e: Enemy, g: Game, dt: number) {
     e.x *= R / rr;
     e.z *= R / rr;
   }
-  if (e.kind !== 'mite' && e.kind !== 'spitter' && e.kind !== 'drone' && e.kind !== 'pylon') {
+  if (!floats(e.kind) && e.kind !== 'pylon' && e.kind !== 'lasher') {
     _xz.x = e.x;
     _xz.z = e.z;
     g.world.colliders.resolve(_xz, e.radius * 0.45);
@@ -500,6 +561,13 @@ export function updateEnemy(e: Enemy, g: Game, dt: number) {
   if (e.kind === 'pylon') {
     e.y = groundNow + 3;
     e.group.position.set(e.x, groundNow - 0.2, e.z);
+  } else if (e.kind === 'lasher') {
+    // rooted: the bloom rises out of and sinks into the ground; its hit centre is the upper trunk
+    const depth = lasherDepth(e) * e.scale;
+    e.group.position.set(e.x, groundNow - 0.1 - depth, e.z);
+    e.y = groundNow + 2.4 * e.scale - depth;
+  } else if (e.airborne) {
+    e.group.position.set(e.x, e.y - e.foot, e.z);
   } else if (e.foot > 0) {
     // walkers follow the ground
     const feet = groundNow + (e.kind === 'boss' && e.variant === 'warden' ? 0.25 + Math.sin(g.time * 1.3) * 0.12 : 0);
@@ -517,10 +585,12 @@ export function updateEnemy(e: Enemy, g: Game, dt: number) {
   else {
     // cores pulse; brighter while telegraphing, dark while a Construct is armoured
     const pulse = (e.armored ? 0.6 : 2.6) + Math.sin(g.time * (e.state === 'wind' ? 14 : 4)) * 0.6;
-    e.coreMat.color.copy(f ? WHITE : CORE_COLOR[e.kind === 'boss' ? e.variant : e.kind] ?? CORE_COLOR.brute).multiplyScalar(f ? 1 : pulse);
+    const base = e.elite ? CORE_COLOR.elite : CORE_COLOR[e.kind === 'boss' ? e.variant : e.kind] ?? CORE_COLOR.brute;
+    e.coreMat.color.copy(f ? WHITE : base).multiplyScalar(f ? 1 : pulse);
   }
-  e.group.rotation.y = e.kind === 'mite' || e.kind === 'spitter' ? 0 : e.yawFace;
+  e.group.rotation.y = e.kind === 'mite' || e.kind === 'spitter' || e.kind === 'bloater' || e.kind === 'prism' ? 0 : e.yawFace;
   animateEnemy(e, g, dt);
+  e.spinCrown(dt);
 
   // health bars for the tougher foes
   if (e.bar) {
@@ -544,6 +614,11 @@ const CORE_COLOR: Record<string, THREE.Color> = {
   mite: new THREE.Color(0xff3b7a),
   spitter: new THREE.Color(0xff8a3b),
   drone: new THREE.Color(0xff2a44),
+  stalker: new THREE.Color(0x7af0ff),
+  bloater: new THREE.Color(0xc8ff4a),
+  prism: new THREE.Color(0xe0d0ff),
+  lasher: new THREE.Color(0xff6a3b),
+  elite: new THREE.Color(0xffd27a),
   pylon: new THREE.Color(0x00e1ff),
   construct: new THREE.Color(0xff2a7a),
   warden: new THREE.Color(0xffa24a),
@@ -552,10 +627,13 @@ const CORE_COLOR: Record<string, THREE.Color> = {
 function idleStep(e: Enemy, g: Game, dt: number, dist: number, gh: number) {
   // camp guards loiter near home and face the player until provoked
   const sway = g.time * 0.5 + e.id;
-  if (e.kind === 'mite' || e.kind === 'spitter' || e.kind === 'drone') {
+  if (floats(e.kind)) {
     e.x += (e.homeX + Math.cos(sway) * 3 - e.x) * Math.min(1, dt * 0.5);
     e.z += (e.homeZ + Math.sin(sway * 1.3) * 3 - e.z) * Math.min(1, dt * 0.5);
-    e.y = damp(e.y, gh + (e.kind === 'mite' ? 1.8 : e.kind === 'drone' ? 5.5 : 2.8) + Math.sin(g.time * 1.4 + e.id) * 0.25, 3, dt);
+    e.y = damp(e.y, gh + HOVER[e.kind]! + 0.2 + Math.sin(g.time * 1.4 + e.id) * 0.25, 3, dt);
+  } else if (e.kind === 'lasher') {
+    // a buried Lasher waits to rise until the hero comes near
+    if (e.state === 'rise') e.st = 0.9;
   }
   const want = Math.atan2(g.player.x - e.x, g.player.z - e.z);
   e.yawFace += angleDiff(e.yawFace, want) * Math.min(1, dt * 1.5);
@@ -564,6 +642,10 @@ function idleStep(e: Enemy, g: Game, dt: number, dist: number, gh: number) {
 
 function animateEnemy(e: Enemy, g: Game, dt: number) {
   const t = g.time;
+  if (e.kind === 'stalker') return animateStalker(e, g, dt);
+  if (e.kind === 'bloater') return animateBloater(e, g, dt);
+  if (e.kind === 'prism') return animatePrism(e, g, dt);
+  if (e.kind === 'lasher') return animateLasher(e, g, dt);
   if (e.kind === 'mite') {
     e.body.rotation.y += dt * (e.idle ? 1 : 4);
     e.body.rotation.x = Math.sin(t * 5 + e.id) * 0.3;
@@ -625,11 +707,11 @@ function aiStep(e: Enemy, g: Game, dt: number, rawDt: number, gh: number) {
   const d3 = Math.hypot(dxz, p.cy - e.y);
   const toP = Math.atan2(dx, dz);
   const flow = g.flowAt(e.x, e.z);
-  if ((e.foot === 0 && e.kind !== 'pylon') || e.kind === 'brute') {
+  if ((e.foot === 0 && e.kind !== 'pylon' && e.kind !== 'lasher') || e.kind === 'brute') {
     e.x += flow.x * rawDt * 0.5;
     e.z += flow.y * rawDt * 0.5;
   }
-  e.yawFace += angleDiff(e.yawFace, toP) * Math.min(1, rawDt * (e.state === 'charge' ? 0 : 5));
+  e.yawFace += angleDiff(e.yawFace, toP) * Math.min(1, rawDt * (e.state === 'charge' || e.kind === 'stalker' ? 0 : 5));
   const playerAlt = p.y - g.world.terrain.heightAt(p.x, p.z);
 
   const touch = (reach = e.radius + 0.7) => {
@@ -823,6 +905,18 @@ function aiStep(e: Enemy, g: Game, dt: number, rawDt: number, gh: number) {
     }
     case 'drone':
       droneStep(e, g, dt, rawDt, gh, dx, dz, dxz, toP);
+      break;
+    case 'stalker':
+      stalkerStep(e, g, dt, rawDt, gh, dxz, toP, touch);
+      break;
+    case 'bloater':
+      bloaterStep(e, g, dt, gh, dxz, d3, toP);
+      break;
+    case 'prism':
+      prismStep(e, g, dt, rawDt, gh, dxz, toP);
+      break;
+    case 'lasher':
+      lasherStep(e, g, dt, gh, dxz, toP, touch);
       break;
     case 'pylon':
       break;
