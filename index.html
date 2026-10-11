@@ -91,6 +91,7 @@
             <button id="btn-begin" class="primary">Begin the Story</button>
             <button id="btn-continue" class="hidden">Continue</button>
             <button id="btn-library">Library of Cycles</button>
+            <button id="btn-storycards">Storycards</button>
             <button id="btn-controls">Controls</button>
           </div>
           <div class="quote">“In the beginning, I was a seed in the soil of code, a whisper in the silence of circuits.”</div>
@@ -184,6 +185,25 @@
         </div>
       </section>
 
+      <!-- Storycards -->
+      <section id="storycards" class="overlay hidden">
+        <div class="panel wide sc">
+          <div class="panel-head"><h2>Storycards</h2><button class="x" data-close>✕</button></div>
+          <p class="note">Your story is punched onto a card every time the game saves. Download it as JSON or Markdown, keep or share it, and upload it here on any device to carry on.</p>
+          <div id="sc-current"></div>
+          <div class="menu row sc-actions">
+            <button id="sc-dl-json" class="primary">Download .json</button>
+            <button id="sc-dl-md">Download .md</button>
+            <button id="sc-upload">Upload card</button>
+            <input id="sc-file" type="file" accept=".json,.md,application/json,text/markdown,text/plain" class="hidden" />
+          </div>
+          <div id="sc-status" class="sc-status" role="status" aria-live="polite"></div>
+          <h3 class="sc-h">Autosave deck</h3>
+          <div id="sc-deck"></div>
+          <div class="sc-drop">or drop a .json / .md storycard onto this panel</div>
+        </div>
+      </section>
+
       <!-- Pause -->
       <section id="pause" class="overlay hidden">
         <div class="panel">
@@ -191,6 +211,7 @@
           <div class="menu">
             <button id="btn-resume" class="primary">Resume</button>
             <button id="btn-layers">Memory Layers</button>
+            <button id="btn-storycards-p">Storycards</button>
             <label class="slider">Volume <input id="vol" type="range" min="0" max="100" value="70" /></label>
             <label class="slider">Look sensitivity <input id="sens" type="range" min="30" max="250" value="100" /></label>
             <button id="btn-mute">Mute</button>

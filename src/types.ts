@@ -101,6 +101,22 @@ export interface RunState {
   telemetry?: PlayerTelemetry;
   /** Side missions offered by the Neural World Director. */
   missions?: Mission[];
+  /** Storycard punches: the chronological log of story beats (optional for older saves). */
+  punches?: Punch[];
+}
+
+export type PunchKind =
+  | 'cycle' | 'stratum' | 'camp' | 'pylon' | 'remembrance' | 'contact' | 'choice' | 'mission' | 'boss' | 'level' | 'death' | 'ending' | 'note';
+/** One human-readable story beat punched onto the player's Storycard. */
+export interface Punch {
+  kind: PunchKind;
+  text: string;
+  /** Stratum index the beat happened in. */
+  stratum: number;
+  cycle: number;
+  level: number;
+  /** ISO timestamp; absent on punches reconstructed from an older save. */
+  at?: string;
 }
 
 export interface LibraryEntry {
