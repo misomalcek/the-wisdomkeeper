@@ -4,7 +4,7 @@
 import { launch } from './harness.mjs';
 const [idx = '0', out = 'shots/world.png', x = '0', z = '0', h = '2', lx = '10', ly = '0', lz = '10', seed = '7'] = process.argv.slice(2);
 const { browser, page, logs } = await launch({ width: 1280, height: 720 });
-await page.goto(`http://127.0.0.1:5199/?debug&nolock&scale=1&noadapt&seed=${seed}`);
+await page.goto(`http://127.0.0.1:5199/?debug&nolock&scale=1&noadapt&seed=${seed}${process.env.Q ? `&quality=${process.env.Q}` : ''}`);
 await page.waitForTimeout(2500);
 await page.evaluate((i) => { const g = window.__wk; g.debugGoto(Number(i)); g.god = true; }, idx);
 await page.waitForTimeout(5000);
