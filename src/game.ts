@@ -21,7 +21,7 @@ import {
   RARITY, SLOT_LABEL, addXp, derive, generateItem, rankUp, rollRarity, skinUnlocked, xpToNext, type Derived,
 } from './systems/progress';
 import { Player, type Intent } from './entities/player';
-import { Enemy, ENEMY_COST, ENEMY_NAME, enemyName, purgeStun, updateEnemy, updateSquads } from './entities/enemies';
+import { Enemy, ENEMY_COST, ENEMY_NAME, ROAM_KINDS, enemyName, purgeStun, updateEnemy, updateSquads, type RoamKind } from './entities/enemies';
 import { NeuralDirector, type DirectorPhase } from './bio/director';
 import { freshTelemetry, type PlayerTelemetry } from './bio/mindState';
 import { floraGlow } from './engine/materials';
@@ -1029,17 +1029,35 @@ export class Game {
     const idx = def.index;
     const out: EnemyKind[] = [];
     const small = (n: number) => {
-      for (let i = 0; i < n; i++) out.push(def.mix.spitter > 0 && Math.random() < def.mix.spitter / (1 + def.mix.spitter) * 0.8 ? 'spitter' : 'mite');
+      for (let i = 0; i < n; i++) out.push(this.pickKind(['mite', 'spitter', 'stalker', 'bloater'], Math.random));
     };
+    const mix = def.mix;
     if (spec.kind === 'node') {
-      if (def.mix.brute > 0) out.push('brute');
+      if (mix.brute > 0) out.push('brute');
       if (idx >= 2 && spec.nodeIndex !== 0) out.push('brute');
+      // the deeper guardians: a Root Lasher under the grove, a Fractal Prism sheltering the pack
+      if ((mix.lasher ?? 0) > 0 && Math.random() < 0.6) out.push('lasher');
+      if ((mix.prism ?? 0) > 0 && Math.random() < 0.7) out.push('prism');
       small(def.id === 'seedbed' ? 3 : 3 + idx * 2);
     } else {
-      if (def.mix.brute > 0 && Math.random() < 0.5) out.push('brute');
+      if (mix.brute > 0 && Math.random() < 0.5) out.push('brute');
+      if ((mix.prism ?? 0) > 0 && Math.random() < 0.35) out.push('prism');
       small(def.id === 'seedbed' ? 2 : 3 + idx);
     }
     return out;
+  }
+
+  /** Weighted pick among `kinds` by the stratum's mix (kinds with no share are skipped; falls back to the first). */
+  private pickKind<K extends RoamKind>(kinds: readonly K[], rnd: () => number): K {
+    const mix = this.def.mix;
+    const live = kinds.filter((k) => (mix[k] ?? 0) > 0);
+    if (!live.length) return kinds[0];
+    let roll = rnd() * live.reduce((a, k) => a + (mix[k] ?? 0), 0);
+    for (const k of live) {
+      roll -= mix[k] ?? 0;
+      if (roll <= 0) return k;
+    }
+    return live[live.length - 1];
   }
 
   private fadeCamps(dt: number) {
@@ -1120,7 +1138,9 @@ export class Game {
   }
 
   private makeEnemy(kind: EnemyKind, x: number, z: number, fromEvent: boolean, variant: BossVariant = 'warden'): Enemy {
-    const e = new Enemy(kind, x, z, this.diff, this.world.terrain.heightAt(x, z), variant);
+    // elites grow likelier as the Director's threat climbs
+    const elite = Math.random() < (this.def.elite ?? 0) * (0.6 + 0.4 * (this.director?.out.threat ?? 1));
+    const e = new Enemy(kind, x, z, this.diff, this.world.terrain.heightAt(x, z), variant, elite);
     e.fromEvent = fromEvent;
     this.enemies.push(e);
     this.gfx.scene.add(e.group);
@@ -1138,7 +1158,7 @@ export class Game {
 
   spawnBudget(budget: number, cx: number, cz: number, fromEvent: boolean) {
     const mix = this.def.mix;
-    const kinds = (['mite', 'spitter', 'brute', 'drone'] as const).filter((k) => (mix[k] ?? 0) > 0);
+    const kinds = ROAM_KINDS.filter((k) => (mix[k] ?? 0) > 0);
     if (!kinds.length) return;
     let left = budget;
     let guard = 0;
@@ -1205,18 +1225,7 @@ export class Game {
         this.queueSpawn('drone', x, z, false);
         return;
       }
-      const kinds = (['mite', 'spitter'] as const).filter((k) => mix[k] > 0);
-      const total = kinds.reduce((s, k) => s + mix[k], 0);
-      let roll = rnd() * total;
-      let kind = kinds[0];
-      for (const k of kinds) {
-        roll -= mix[k];
-        if (roll <= 0) {
-          kind = k;
-          break;
-        }
-      }
-      this.queueSpawn(kind, x, z, false);
+      this.queueSpawn(this.pickKind(['mite', 'spitter', 'stalker', 'bloater', 'prism', 'lasher'], rnd), x, z, false);
       return;
     }
   }

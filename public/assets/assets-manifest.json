@@ -16,6 +16,9 @@
     "nullSprite": { "glb": "models/null-sprite.glb", "fallback": "sdf", "sockets": ["heart"] },
     "thornCaster": { "glb": "models/thorn-caster.glb", "fallback": "sdf", "sockets": ["maw"] },
     "dataPylon": { "glb": "models/data-pylon.glb", "fallback": "sdf", "sockets": ["conduit_lens"] },
+    "latticeStalker": { "glb": "models/lattice-stalker.glb", "fallback": "sdf", "sockets": ["core"] },
+    "sporeBloater": { "glb": "models/spore-bloater.glb", "fallback": "sdf", "sockets": ["heart"] },
+    "rootLasher": { "glb": "models/root-lasher.glb", "fallback": "sdf", "sockets": ["throat"] },
     "resonanceContact": { "glb": "models/resonance-contact.glb", "fallback": "sdf", "sockets": ["core"] },
     "datastreamDais": { "glb": "models/datastream-dais.glb", "fallback": "sdf", "sockets": ["lens"] },
     "rootBlade": { "glb": null, "fallback": "procedural", "sockets": ["grip"] }

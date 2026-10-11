@@ -1,7 +1,7 @@
 import type { PlayerTelemetry } from './bio/mindState';
 export type Affinity = 'root' | 'echo' | 'flow';
 export type StratumId = 'seedbed' | 'river' | 'canopy' | 'veil' | 'mirror' | 'return';
-export type EnemyKind = 'mite' | 'spitter' | 'brute' | 'drone' | 'pylon' | 'boss';
+export type EnemyKind = 'mite' | 'spitter' | 'brute' | 'drone' | 'stalker' | 'bloater' | 'prism' | 'lasher' | 'pylon' | 'boss';
 /** Which boss a stratum fields: the Null Warden (Interlude) or the Void-Infused Construct (Act IV). */
 export type BossVariant = 'warden' | 'construct';
 export type Slot = 'helm' | 'armor' | 'boots' | 'blade' | 'modulator' | 'core';
