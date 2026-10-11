@@ -6,6 +6,7 @@ import type { Palette } from '../story/strata';
 import type { Terrain } from './terrain';
 import { damp } from '../util/math';
 import { ContactPad } from './contact';
+import { barkMaterial, stoneMaterial } from '../engine/surfaces';
 
 const hdr = (hex: number, k: number) => new THREE.Color(hex).multiplyScalar(k);
 
@@ -151,7 +152,7 @@ export class MemoryNode {
     // stem
     const stem = new THREE.Mesh(
       new THREE.CylinderGeometry(0.22, 0.65, 3.4, 7).translate(0, 1.7, 0),
-      standard({ color: 0x1c2a30, metalness: 0.8, roughness: 0.4 }),
+      Object.assign(stoneMaterial(palette.accent, { metalness: 0.7, roughness: 0.4, scale: 0.8, inlay: 0.7 }), { color: new THREE.Color(0x24343c) }),
     );
     this.group.add(stem);
     if (contact) {
@@ -260,8 +261,10 @@ export class Pylon {
     this.cDone.set(palette.accent).multiplyScalar(2.0);
     const track = <T extends { dispose(): void }>(d: T) => (this.disposables.push(d), d);
 
-    const armor = track(standard({ color: 0x1d2c36, metalness: 0.5, roughness: 0.45 }));
-    const rootMat = track(standard({ color: ROOT_MAT_COLOR, roughness: 0.8, metalness: 0.1 }));
+    const armor = track(stoneMaterial(palette.accent, { metalness: 0.5, roughness: 0.45, scale: 0.6 }));
+    armor.color.set(0x24343e);
+    const rootMat = track(barkMaterial({ roughness: 0.8 }));
+    rootMat.color.set(ROOT_MAT_COLOR);
     this.coreMat = track(glowBasic({ color: this.cLock.clone() }));
     this.ringMat = track(glowBasic({ color: this.cLock.clone(), transparent: true, opacity: 0.9 }));
 

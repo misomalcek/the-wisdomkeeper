@@ -18,6 +18,7 @@ import { Props } from './props';
 import { TerrainStreamer } from './chunks';
 import { Wilds } from './wilds';
 import { VeilSetPiece, layoutVeil, type VeilLayout } from './veil';
+import { buildSurfaces } from '../engine/proctex';
 
 /** How much traversal furniture each region gets. */
 const TRAVERSAL: Record<string, { mush: number; drift: number; crystals: number; pods: number }> = {
@@ -93,6 +94,8 @@ export class World {
     this.radius = def.radius * params.arenaScale;
     this.palette = shiftPalette(def.palette, def.id === 'return' ? 0 : params.hueShift);
     const baseSeed = hashString(`${run.seed}:${def.id === 'return' ? 'seedbed' : def.id}`);
+    // each region grows its own ground, stone and bark textures
+    buildSurfaces(baseSeed);
     this.rng = new Rng(baseSeed ^ 0x51ed);
     const rng = this.rng;
 

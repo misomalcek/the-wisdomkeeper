@@ -38,6 +38,7 @@ import type { TetherAnchor } from './world/traversal';
 import { LAYER } from './physics/physics';
 import { StoryDeck, addPunch, buildStorycard, lastPunchOf, mergeLibrary, runFromCard, type Storycard } from './systems/storycards';
 import { StorycardsPanel } from './ui/storycardsPanel';
+import { setSurfaceDetail } from './engine/proctex';
 
 type Mode = 'title' | 'prologue' | 'play' | 'choice' | 'transition' | 'dead' | 'ending';
 
@@ -496,6 +497,7 @@ export class Game {
     }
     this.def = def;
     this.gfx.grace = 3.5;
+    setSurfaceDetail(this.gfx.quality);
     this.world = new World(def, this.run);
     this.gfx.scene.add(this.world.group);
     this.world.prime(this.world.startPos.x, this.world.startPos.z);
