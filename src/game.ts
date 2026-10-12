@@ -635,8 +635,10 @@ export class Game {
     window.setTimeout(() => {
       if (this.run.stratumIndex !== index) return;
       this.ui.say(this.def.intro);
-      if (this.pendingNote && index > 0 && !this.def.boss && this.def.id !== 'return') this.ui.say(`The Mycelial Mind noticed — ${this.pendingNote}`);
-      else if (drift) this.ui.say(`The land remembers — ${drift.why}.`);
+      const noticed = this.pendingNote && index > 0 && !this.def.boss && this.def.id !== 'return';
+      if (noticed) this.ui.say(`The Mycelial Mind noticed — ${this.pendingNote}`);
+      // a decision made for this region is told even after the Mind's note; an inherited drift only in its place
+      if (drift && (decided || !noticed)) this.ui.say(`The land remembers — ${drift.why}.`);
       this.pendingNote = '';
     }, 1800);
     this.saveRun();

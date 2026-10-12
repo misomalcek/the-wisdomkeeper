@@ -251,6 +251,11 @@ for (const aff of ['root', 'echo', 'flow']) {
     g.debugStep(3);
     g.spawnEnemy('mite', p.x + 12, p.z, false);
     const e = g.enemies[g.enemies.length - 1];
+    // a strain an edition breeds stays inside the clamp, and its size survives the mite's own jitter
+    const hp0 = e.maxHp, sp0 = e.speed;
+    e.applyStrain({ size: 2, vigor: 1.5, haste: 1.25, hue: 0.1 });
+    g.debugStep(20);
+    window.__strain = { hp: e.maxHp / hp0, speed: e.speed / sp0, size: e.body.scale.x, again: (e.applyStrain({ vigor: 1.5 }), e.maxHp / hp0) };
     e.dead = true; g.onEnemyKilled(e);
     g.plantEcho(p.x + 6, p.z + 6, 'manual');
     p.invuln = 0; g.hurtPlayer(5, p.x + 1, p.z);
@@ -273,6 +278,8 @@ for (const aff of ['root', 'echo', 'flow']) {
   await page.evaluate(() => window.__wk.debugGoto(2));
   const after = await page.evaluate(() => window.__seen);
   check('hooks: tick, spawn, kill, echo, hurt and death fire', r.tick > 0 && r.spawn >= 1 && r.kill >= 1 && r.echo >= 1 && r.hurt >= 2 && r.death === 1, JSON.stringify(r));
+  const strain = await page.evaluate(() => window.__strain);
+  check('hooks: a bred strain is clamped and keeps its size', Math.abs(strain.hp * strain.speed - 1.45) < 0.12 && Math.abs(strain.speed - 1.25) < 1e-6 && strain.size > 1.1 && strain.again === strain.hp, JSON.stringify(strain));
   check('hooks: the travel gate bars a purged pylon', gate.toast === 'barred' && !gate.busy, `toast=${gate.toast}`);
   check('hooks: respawn, stratum and save fire', after.respawn >= 1 && after.stratum >= 1 && after.save >= 1, JSON.stringify(after));
   check('hooks: no console errors', logs.length === 0, logs.join(' | '));

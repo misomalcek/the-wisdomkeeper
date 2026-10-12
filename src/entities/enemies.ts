@@ -12,6 +12,7 @@ import { miteGeometry, spitterGeometry } from '../assets/minorModels';
 import { CB, CONSTRUCT_CORE, buildConstructRig, constructGeometry, dataPylonGeometry, droneGeometry, ringGeometry } from '../assets/nullModels';
 import type { BossVariant, EnemyKind } from '../types';
 import { TAU, angleDiff, clamp, damp } from '../util/math';
+import { clampStrain, type Strain } from './strain';
 import { BROOD_HOVER, animateBloater, animateLasher, animatePrism, animateStalker, bloaterStep, buildBloater, buildLasher, buildPrism, buildStalker, lasherDepth, lasherStep, prismStep, stalkerStep } from './brood';
 
 let nextId = 1;
@@ -177,6 +178,12 @@ export class Enemy {
   shieldT = 0;
   readonly elite: boolean;
   private eliteRing?: THREE.Mesh;
+  /** Size from the elite crown and a strain; animators that reshape `body` every frame keep it. */
+  bodyScale = 1;
+  /** The strain an edition bred this enemy into (see `strain.ts`), already clamped; null for the plain kind. */
+  strain: Required<Strain> | null = null;
+  /** Core glow of a strain, in place of the kind's own. */
+  private strainCore: THREE.Color | null = null;
 
   constructor(kind: EnemyKind, x: number, z: number, diff: number, groundY: number, variant: BossVariant = 'warden', elite = false) {
     this.kind = kind;
@@ -257,6 +264,7 @@ export class Enemy {
     this.value *= 2;
     this.radius *= 1.12;
     this.scale *= ELITE.size;
+    this.bodyScale *= ELITE.size;
     this.body.scale.multiplyScalar(ELITE.size);
     const m = glowBasic({ color: new THREE.Color(0xffd27a).multiplyScalar(2.4) });
     this.extraMats.push(m);
@@ -264,6 +272,28 @@ export class Enemy {
     this.eliteRing.rotation.x = Math.PI / 2;
     this.eliteRing.position.y = this.kind === 'brute' ? this.foot * 1.25 * ELITE.size + 1.2 : this.kind === 'stalker' || this.kind === 'lasher' ? 1.6 : 0;
     this.group.add(this.eliteRing);
+  }
+
+  /** Breeds this enemy into a strain (once; clamped, so any edition's strain stays inside the game's balance). */
+  applyStrain(s: Strain) {
+    if (this.strain || this.kind === 'boss' || this.kind === 'pylon') return;
+    const c = clampStrain(s);
+    this.strain = c;
+    this.hp = this.maxHp = Math.max(1, Math.round(this.maxHp * c.vigor));
+    this.speed *= c.haste;
+    this.radius *= c.size;
+    this.scale *= c.size;
+    this.bodyScale *= c.size;
+    this.body.scale.multiplyScalar(c.size);
+    if (c.hue) {
+      const base = this.elite ? CORE_COLOR.elite : (CORE_COLOR[this.kind] ?? CORE_COLOR.brute);
+      this.strainCore = base.clone().offsetHSL(c.hue, 0, 0);
+    }
+  }
+
+  /** The core's glow colour this frame's pulse multiplies. */
+  coreColor(): THREE.Color {
+    return this.strainCore ?? (this.elite ? CORE_COLOR.elite : CORE_COLOR[this.kind === 'boss' ? this.variant : this.kind] ?? CORE_COLOR.brute);
   }
 
   /** Spin the elite crown. */
@@ -585,8 +615,7 @@ export function updateEnemy(e: Enemy, g: Game, dt: number) {
   else {
     // cores pulse; brighter while telegraphing, dark while a Construct is armoured
     const pulse = (e.armored ? 0.6 : 2.6) + Math.sin(g.time * (e.state === 'wind' ? 14 : 4)) * 0.6;
-    const base = e.elite ? CORE_COLOR.elite : CORE_COLOR[e.kind === 'boss' ? e.variant : e.kind] ?? CORE_COLOR.brute;
-    e.coreMat.color.copy(f ? WHITE : base).multiplyScalar(f ? 1 : pulse);
+    e.coreMat.color.copy(f ? WHITE : e.coreColor()).multiplyScalar(f ? 1 : pulse);
   }
   e.group.rotation.y = e.kind === 'mite' || e.kind === 'spitter' || e.kind === 'bloater' || e.kind === 'prism' ? 0 : e.yawFace;
   animateEnemy(e, g, dt);
@@ -649,8 +678,9 @@ function animateEnemy(e: Enemy, g: Game, dt: number) {
   if (e.kind === 'mite') {
     e.body.rotation.y += dt * (e.idle ? 1 : 4);
     e.body.rotation.x = Math.sin(t * 5 + e.id) * 0.3;
-    if (Math.random() < 0.04 || e.flash > 0) e.body.scale.set(1 + (Math.random() - 0.5) * 0.3, 1 + (Math.random() - 0.5) * 0.2, 1 + (Math.random() - 0.5) * 0.3);
-    else e.body.scale.lerp(_one, Math.min(1, dt * 18));
+    const k = e.bodyScale;
+    if (Math.random() < 0.04 || e.flash > 0) e.body.scale.set(k * (1 + (Math.random() - 0.5) * 0.3), k * (1 + (Math.random() - 0.5) * 0.2), k * (1 + (Math.random() - 0.5) * 0.3));
+    else e.body.scale.lerp(_size.setScalar(k), Math.min(1, dt * 18));
   } else if (e.kind === 'spitter') {
     e.body.rotation.y += dt * 1.5;
     for (const s of e.spinners) s.rotation.z += dt * 5;
@@ -689,7 +719,7 @@ function animateEnemy(e: Enemy, g: Game, dt: number) {
     if (j.core) j.core.rotation.y += dt * 2;
   }
 }
-const _one = new THREE.Vector3(1, 1, 1);
+const _size = new THREE.Vector3();
 
 /** Fires at the player's chest, leading the shot by the player's velocity. */
 function leadTarget(g: Game, from: { x: number; y: number; z: number }, speed: number, out: THREE.Vector3) {
