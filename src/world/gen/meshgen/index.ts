@@ -1,13 +1,14 @@
 /**
  * Every generated prototype mesh the world instances, built in two batches (in a worker when available): the flora
  * and stone set first (trees per species × seeded variant × level of detail, boulders, hoodoos, crystal clusters),
- * then the fractal landmark formations, which take longer. Keys are strings ("tree:canopy:1:0"), so the main thread
+ * then the fractal landmark formations and the Atlas Stations, which take longer. Keys are strings ("tree:canopy:1:0"), so the main thread
  * creates its instanced pools before the meshes arrive.
  */
 import type { MeshArrays } from './geo';
 import { TREE_LODS, TREE_SPECIES, buildTree, buildTuft } from './trees';
 import { buildBoulder, buildCrystalCluster, buildHoodoo } from './rocks';
 import { FORMATIONS, buildFormation } from './fractals';
+import { STATIONS, buildStation } from './stations';
 
 export type ProtoSet = Record<string, MeshArrays>;
 export const TREE_VARIANTS = 3;
@@ -21,6 +22,7 @@ export const hoodooKey = (v: number, lod: number) => `hoodoo:${v}:${lod}`;
 export const crystalKey = (v: number) => `crystal:${v}`;
 export const formKey = (i: number, lod: number) => `form:${i}:${lod}`;
 export const tuftKey = (v: number) => `tuft:${v}`;
+export const stationKey = (i: number, lod: number) => `station:${i}:${lod}`;
 
 export function buildFloraSet(): ProtoSet {
   const out: ProtoSet = {};
@@ -47,6 +49,11 @@ export function buildFormationSet(): ProtoSet {
   FORMATIONS.forEach((f, i) => {
     out[formKey(i, 0)] = buildFormation(f, 56);
     out[formKey(i, 1)] = buildFormation(f, 30);
+  });
+  // Atlas Stations: domes and gridshells analysed and sized by the truss solver, then meshed (real metres)
+  STATIONS.forEach((s, i) => {
+    out[stationKey(i, 0)] = buildStation(s, 0);
+    out[stationKey(i, 1)] = buildStation(s, 1);
   });
   return out;
 }

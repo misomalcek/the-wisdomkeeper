@@ -1,5 +1,6 @@
 // Procedural QA shots: node scripts/shot-proc.mjs <stratum> <isle|biome:N|x,z> <name> [yaw] [pitch] [zoom]
-// env: Q quality tier, PF flag spec (?pf=), SEED, PULSE=1 fires purification rings around the hero before the shot
+// env: LM=m stand LM metres from the nearest landmark (LMI=i the i-th nearest, LMK=station for Atlas Stations),
+// Q quality tier, PF flag spec (?pf=), SEED, PULSE=1 fires purification rings around the hero before the shot
 import { serve, launch } from './harness.mjs';
 import path from 'node:path';
 const server = await serve(path.resolve('dist'));
@@ -12,7 +13,7 @@ await page.goto(`http://127.0.0.1:4173/?debug&nolock&noadapt&scale=1&${q.join('&
 await page.waitForTimeout(1500);
 await page.evaluate((i) => { const g = window.__wk; g.debugGoto(Number(i)); g.god = true; }, idx);
 await page.waitForTimeout(Number(process.env.SETTLE || 6000));
-const info = await page.evaluate(([where, yaw, pitch, zoom, HIGHV, VALLEYV, LMV, LMI]) => {
+const info = await page.evaluate(([where, yaw, pitch, zoom, HIGHV, VALLEYV, LMV, LMI, LMK]) => {
   const g = window.__wk;
   const w = g.world;
   let x = 0, z = 0, note = '';
@@ -75,7 +76,7 @@ const info = await page.evaluate(([where, yaw, pitch, zoom, HIGHV, VALLEYV, LMV,
   w.prime(x, z);
   if (LMV && w.landmarks) {
     // stand LM metres from the nearest fractal formation, facing it
-    const ps = w.landmarks.placed.sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z));
+    const ps = (LMK === 'station' ? w.landmarks.placedStations : w.landmarks.placed).sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z));
     const p = ps[Math.min(ps.length - 1, Number(LMI) || 0)];
     if (p) {
       const dx = x - p.x, dz = z - p.z, d = Math.hypot(dx, dz) || 1;
@@ -92,7 +93,7 @@ const info = await page.evaluate(([where, yaw, pitch, zoom, HIGHV, VALLEYV, LMV,
   g.cam.snap(g.player.cameraTarget);
   // AIR=height: look down at the hero's spot from above and behind
   return { x, z, note, yaw: g.cam.yaw };
-}, [where, yaw, pitch, zoom, process.env.HIGH === '0' ? 0 : 1, process.env.VALLEY ? 1 : 0, Number(process.env.LM || 0), process.env.LMI || 0]);
+}, [where, yaw, pitch, zoom, process.env.HIGH === '0' ? 0 : 1, process.env.VALLEY ? 1 : 0, Number(process.env.LM || 0), process.env.LMI || 0, process.env.LMK || 'formation']);
 console.log(JSON.stringify(info));
 if (process.env.AIR) {
   await page.evaluate(([h, yaw, LOOKV]) => {

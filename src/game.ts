@@ -877,14 +877,14 @@ export class Game {
     if (lv.u > 0.5) this.player.res = Math.min(this.derived.maxRes, this.player.res + dt * 3);
     this.particles.update(dt);
     this.fadeCamps(dt);
-    this.announcePlace(dt);
+    this.announcePlace();
   }
 
-  /** Name the province or formation the hero has just reached (checked twice a second). */
-  private announcePlace(dt: number) {
-    this.placeT -= dt;
-    if (this.placeT > 0 || this.mode !== 'play') return;
-    this.placeT = 0.5;
+  /** Name the province, formation or station the hero has just reached (checked twice a second). */
+  private announcePlace() {
+    const now = performance.now();
+    if (now < this.placeT || this.mode !== 'play') return;
+    this.placeT = now + 500;
     const p = this.world.placeAt(this.player.x, this.player.z);
     // provinces and formations are remembered apart, so stepping away from a formation doesn't re-announce the land
     if (!p || this.placeSeen.has(p.key)) return;

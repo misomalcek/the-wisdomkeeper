@@ -21,6 +21,7 @@ import { Landmarks } from './landmarks';
 import { Network } from './network';
 import { Toponymy, title } from './gen/names';
 import { FORMATIONS } from './gen/meshgen/fractals';
+import { STATIONS } from './gen/meshgen/stations';
 import { VeilSetPiece, layoutVeil, type VeilLayout } from './veil';
 import { buildSurfaces } from '../engine/proctex';
 import { perf } from '../engine/perf';
@@ -457,6 +458,14 @@ export class World {
     const forms = this.terrain.wild?.forms;
     if (!forms || this.terrain.wildness(x, z) < 0.6) return null;
     const f = this.landmarks?.near(x, z, 70);
+    if (f?.kind === 'station') {
+      const s = STATIONS[f.form];
+      const sub =
+        s.kind === 'dome'
+          ? `${s.freq}V geodesic dome · ${s.material} members sized by stiffness analysis`
+          : `${s.material} gridshell · a hanging net, inverted · ${s.openings} arches`;
+      return { key: `s${f.i},${f.j}`, name: title(this.names.station(f.i, f.j)), sub };
+    }
     if (f) {
       const s = FORMATIONS[f.form];
       const sub =

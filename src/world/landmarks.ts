@@ -4,9 +4,10 @@ import type { Terrain } from './terrain';
 import type { Physics } from '../physics/physics';
 import type { Palette } from '../story/strata';
 import { FORMATIONS } from './gen/meshgen/fractals';
-import { formKey } from './gen/meshgen/index';
+import { STATIONS } from './gen/meshgen/stations';
+import { formKey, stationKey } from './gen/meshgen/index';
 import { protoArrays, protoGeometry, whenProtos } from './protos';
-import { formationMaterial } from '../engine/surfaces';
+import { formationMaterial, structureMaterial } from '../engine/surfaces';
 import { occlusionFade } from './occlusion';
 import { SITE_CELL, latticeSite } from './gen/sites';
 
@@ -14,13 +15,15 @@ import { SITE_CELL, latticeSite } from './gen/sites';
 const CELL = SITE_CELL;
 const RING = 2;
 const PER = (2 * RING + 1) ** 2;
-/** Formations nearer than this use the fine mesh and get a collider. */
+/** Sites nearer than this use the fine mesh and get a collider. */
 const NEAR = 320;
 
 interface Site {
   key: string;
+  kind: 'formation' | 'station';
   i: number;
   j: number;
+  /** Formation index, or station variant index. */
   form: number;
   x: number;
   z: number;
@@ -29,18 +32,23 @@ interface Site {
 }
 
 const _v = new THREE.Vector3();
+const UP = new THREE.Vector3(0, 1, 0);
 
 /**
- * Fractal landmarks of the Wilds: about half the cells of a 380 m lattice raise a formation meshed from a true 3D
- * fractal (gen/meshgen/fractals): Mandelbulbs over basins and dune seas, Menger-sponge ruins in the canyonlands,
- * Julia-bulb towers on the ranges. 22–50 m tall, sunk into the ground, solid (trimesh colliders) when the hero is near,
- * and seen from far off over the horizon haze. Deterministic per world seed.
+ * Landmarks of the Wilds on a 380 m lattice (gen/sites):
+ * - about half the cells raise a formation meshed from a true 3D fractal (gen/meshgen/fractals): Mandelbulbs over
+ *   basins and dune seas, Menger-sponge ruins in the canyonlands, Julia-bulb towers on the ranges, 22–50 m tall;
+ * - on open, gentle ground about half of the rest hold an Atlas Station (gen/meshgen/stations): a geodesic dome or a
+ *   form-found gridshell whose members were sized by a stiffness analysis, at its real size.
+ * Solid (trimesh colliders) when the hero is near, seen from far off over the horizon haze, deterministic per seed.
  */
 export class Landmarks {
   readonly group = new THREE.Group();
   /** Atlas Stations stand on the lattice cells the formations leave free. */
-  readonly stations = false;
+  readonly stations = true;
+  /** [formations…, stations…] × [LOD0, LOD1]. */
   private meshes: THREE.InstancedMesh[][] = [];
+  private keys: string[][] = [];
   private sites = new Map<string, Site>();
   private lastX = 1e9;
   private lastZ = 1e9;
@@ -51,9 +59,10 @@ export class Landmarks {
     pal: Palette,
     private seed: number,
   ) {
-    const mat = occlusionFade(formationMaterial(pal.accent, pal.accent2, pal.groundHigh));
-    for (let f = 0; f < FORMATIONS.length; f++) {
-      const row: THREE.InstancedMesh[] = [];
+    const fmat = occlusionFade(formationMaterial(pal.accent, pal.accent2, pal.groundHigh));
+    const smat = occlusionFade(structureMaterial(pal.accent, pal.accent2));
+    const row = (mat: THREE.Material, key: (l: number) => string) => {
+      const r: THREE.InstancedMesh[] = [];
       for (let l = 0; l < 2; l++) {
         const m = new THREE.InstancedMesh(new THREE.BufferGeometry(), mat, PER);
         m.count = 0;
@@ -62,23 +71,43 @@ export class Landmarks {
         m.castShadow = l === 0;
         m.receiveShadow = true;
         this.group.add(m);
-        row.push(m);
+        r.push(m);
       }
-      this.meshes.push(row);
-    }
+      this.meshes.push(r);
+      this.keys.push([key(0), key(1)]);
+    };
+    FORMATIONS.forEach((_, f) => row(fmat, (l) => formKey(f, l)));
+    STATIONS.forEach((_, s) => row(smat, (l) => stationKey(s, l)));
     whenProtos(() => {
       if (this.disposed) return;
-      this.meshes.forEach((row, f) => row.forEach((m, l) => (m.geometry = protoGeometry(formKey(f, l)) ?? m.geometry)));
+      this.meshes.forEach((r, k) => r.forEach((m, l) => (m.geometry = protoGeometry(this.keys[k][l]) ?? m.geometry)));
       this.lastX = 1e9; // rebuild instances and colliders now the meshes exist
     }, 1);
   }
 
-  /** The formation a lattice cell raises, or null. */
+  /** Row of `meshes` / `keys` for a site. */
+  private rowOf(s: { kind: Site['kind']; form: number }) {
+    return s.kind === 'formation' ? s.form : FORMATIONS.length + s.form;
+  }
+
+  /** The landmark a lattice cell raises, or null. */
   private site(i: number, j: number): Site | null {
-    const st = latticeSite(this.terrain.shape, this.seed, i, j, false);
-    if (!st || st.kind !== 'formation') return null;
-    const { x, z, form } = st;
+    const st = latticeSite(this.terrain.shape, this.seed, i, j, this.stations);
+    if (!st) return null;
+    const { x, z } = st;
     const t = this.terrain;
+    const rot = new THREE.Quaternion().setFromAxisAngle(UP, st.r2 * Math.PI * 2);
+    if (st.kind === 'station') {
+      // real metres: set it on the lowest ground under its rim, a little sunk, so no foot hangs in the air
+      const form = Math.min(STATIONS.length - 1, Math.floor(st.form * STATIONS.length));
+      const r = STATIONS[form].kind === 'dome' ? 12 : 16;
+      let y = t.heightAt(x, z);
+      for (let k = 0; k < 8; k++) y = Math.min(y, t.heightAt(x + Math.cos(k * 0.785) * r, z + Math.sin(k * 0.785) * r));
+      const sc = 0.9 + 0.25 * st.r1;
+      const m = new THREE.Matrix4().compose(_v.set(x, y - 0.3, z), rot, new THREE.Vector3(sc, sc, sc));
+      return { key: `${i},${j}`, kind: 'station', i, j, form, x, z, m, col: null };
+    }
+    const form = st.form;
     const H = 22 + 28 * st.r1;
     const proto = FORMATIONS[form];
     // sink it to the lowest ground under its footprint so it never floats on a slope
@@ -86,12 +115,8 @@ export class Landmarks {
     let y = t.heightAt(x, z);
     for (let k = 0; k < 6; k++) y = Math.min(y, t.heightAt(x + Math.cos(k) * r, z + Math.sin(k) * r));
     y -= H * (proto.kind === 'menger' ? 0.12 : 0.08);
-    const m = new THREE.Matrix4().compose(
-      _v.set(x, y, z),
-      new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), st.r2 * Math.PI * 2),
-      new THREE.Vector3(H, H, H),
-    );
-    return { key: `${i},${j}`, i, j, form, x, z, m, col: null };
+    const m = new THREE.Matrix4().compose(_v.set(x, y, z), rot, new THREE.Vector3(H, H, H));
+    return { key: `${i},${j}`, kind: 'formation', i, j, form, x, z, m, col: null };
   }
 
   update(x: number, z: number) {
@@ -120,7 +145,7 @@ export class Landmarks {
     for (const row of this.meshes) for (const m of row) m.count = 0;
     for (const s of this.sites.values()) {
       const near = Math.hypot(s.x - x, s.z - z) < NEAR;
-      const m = this.meshes[s.form][near ? 0 : 1];
+      const m = this.meshes[this.rowOf(s)][near ? 0 : 1];
       m.setMatrixAt(m.count++, s.m);
       if (near && !s.col) s.col = this.collider(s);
       else if (!near && s.col) {
@@ -138,7 +163,7 @@ export class Landmarks {
 
   /** A trimesh collider from the coarse mesh, in world space. */
   private collider(s: Site) {
-    const a = protoArrays(formKey(s.form, 1));
+    const a = protoArrays(this.keys[this.rowOf(s)][1]);
     if (!a) return null;
     const v = new Float32Array(a.pos.length);
     for (let k = 0; k < v.length; k += 3) {
@@ -152,12 +177,19 @@ export class Landmarks {
 
   /** Formations in view (debug / shots). */
   get placed() {
-    return [...this.sites.values()].map((s) => ({ x: s.x, z: s.z, form: s.form }));
+    return [...this.sites.values()].filter((s) => s.kind === 'formation').map((s) => ({ x: s.x, z: s.z, form: s.form }));
   }
 
-  /** The formation within r metres of (x, z), if any. */
+  /** Stations in view (debug / shots). */
+  get placedStations() {
+    return [...this.sites.values()].filter((s) => s.kind === 'station').map((s) => ({ x: s.x, z: s.z, form: s.form }));
+  }
+
+  /** The landmark within r metres of (x, z), if any (stations count from their rim). */
   near(x: number, z: number, r: number) {
-    for (const s of this.sites.values()) if (Math.hypot(s.x - x, s.z - z) < r) return { i: s.i, j: s.j, form: s.form };
+    for (const s of this.sites.values()) {
+      if (Math.hypot(s.x - x, s.z - z) < r + (s.kind === 'station' ? 14 : 0)) return { kind: s.kind, i: s.i, j: s.j, form: s.form };
+    }
     return null;
   }
 
@@ -167,5 +199,6 @@ export class Landmarks {
     for (const s of this.sites.values()) if (s.col) this.physics.removeCollider(s.col);
     for (const row of this.meshes) for (const m of row) m.dispose();
     (this.meshes[0][0].material as THREE.Material).dispose();
+    (this.meshes[FORMATIONS.length][0].material as THREE.Material).dispose();
   }
 }

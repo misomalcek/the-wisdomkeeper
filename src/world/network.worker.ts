@@ -24,6 +24,7 @@ let init: Init | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
 let burn = 0;
 let sincePost = 0;
+let carry = 0;
 const siteFoods = new Map<string, { x: number; z: number; w: number; ttl: number }>();
 
 /** Feed the network from every site of the lattice inside the window (and drop those that left it). */
@@ -73,10 +74,13 @@ function tick() {
     if (burn <= 0) post();
     return;
   }
-  const n = Math.max(1, Math.round(init.rate / 10));
-  sim.step(n, 0.1);
+  // `rate` steps a second, on a 10 Hz tick (fractions carried over)
+  carry += init.rate / 10;
+  const n = Math.floor(carry);
+  carry -= n;
+  if (n > 0) sim.step(n, 0.1);
   sincePost += n;
-  if (sincePost >= init.rate * 0.6) {
+  if (sincePost >= init.rate * 1.2) {
     sincePost = 0;
     post();
   }

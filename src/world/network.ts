@@ -41,7 +41,7 @@ export class Network {
       net: { size: net.size, cell: net.cell, agents: low ? 7000 : 14000, seed: o.siteSeed },
       siteSeed: o.siteSeed,
       stations: o.stations,
-      rate: low ? 30 : 60,
+      rate: 10,
       pois: o.pois,
       x: o.x,
       z: o.z,

@@ -208,3 +208,38 @@ export function formationMaterial(accent: THREE.ColorRepresentation, accent2: TH
   bump(m, s.g.mul(0.4).sub(s.r.mul(0.6)), 0.04);
   return m;
 }
+
+/**
+ * Atlas Stations (gen/meshgen/stations): members carry their own structural analysis. aAux = (part, signed axial
+ * stress −1 compression … +1 tension, height 0..1, utilisation 0..1). Struts are oiled timber; a member glows cyan
+ * in tension and amber in compression, brighter the harder it works, with light running along the load path (up
+ * the ties, down the struts to the ground). Joints are dark bronze nodes; panels are frosted, faintly lit glass.
+ */
+export function structureMaterial(accent: THREE.ColorRepresentation, accent2: THREE.ColorRepresentation) {
+  const m = new MeshStandardNodeMaterial({ roughness: 0.55, metalness: 0.2 });
+  const aux: N = attribute('aAux', 'vec4');
+  const part: N = aux.x;
+  const st: N = aux.y;
+  const util: N = aux.w;
+  const b: N = biplanar(surfaces.bark, positionWorld, normalWorld, 1.4, 0.5);
+  const timber: N = vec3(0.3, 0.2, 0.12).mul(b.b.mul(0.5).add(0.7)).mul(float(1).sub(b.g.mul(0.35)));
+  const bronze: N = vec3(0.16, 0.12, 0.08);
+  const glass: N = color(new THREE.Color(accent)).mul(0.12).add(vec3(0.03, 0.04, 0.05));
+  const isJoint: N = smoothstep(0.5, 0.6, part).mul(smoothstep(1.6, 1.4, part));
+  const isPanel: N = smoothstep(1.5, 1.6, part);
+  m.colorNode = mix(mix(timber, bronze, isJoint), glass, isPanel);
+  m.metalnessNode = mix(mix(float(0.05), float(0.85), isJoint), float(0.5), isPanel);
+  m.roughnessNode = mix(mix(float(0.62), float(0.32), isJoint), float(0.22), isPanel);
+  const tension: N = color(new THREE.Color(accent));
+  const compression: N = color(new THREE.Color(0xffa040));
+  const sc: N = mix(compression, tension, smoothstep(-0.15, 0.15, st));
+  // light runs up the ties and down the struts, faster in the members that carry more
+  const flow: N = sin(positionWorld.y.mul(2.2).sub(worldTime.mul(st.sign().mul(util.mul(2).add(0.6))))).mul(0.5).add(0.5);
+  const load: N = util.mul(util).mul(flow.mul(0.6).add(0.4));
+  const strutGlow: N = sc.mul(load.mul(0.9).add(0.03)).mul(float(1).sub(isPanel)).mul(float(1).sub(isJoint.mul(0.6)));
+  const panelGlow: N = mix(color(new THREE.Color(accent)), color(new THREE.Color(accent2)), aux.z).mul(0.06).mul(isPanel);
+  m.emissiveNode = strutGlow.add(panelGlow).add(sc.mul(isJoint).mul(0.25).mul(util.add(0.2))).mul(floraGlow);
+  bump(m, b.g.mul(0.5).sub(b.r.mul(0.3)).mul(float(1).sub(isPanel)), 0.03);
+  m.side = THREE.DoubleSide;
+  return m;
+}
