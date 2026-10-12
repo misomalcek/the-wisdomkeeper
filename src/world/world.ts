@@ -19,6 +19,9 @@ import { TerrainStreamer } from './chunks';
 import { Wilds } from './wilds';
 import { VeilSetPiece, layoutVeil, type VeilLayout } from './veil';
 import { buildSurfaces } from '../engine/proctex';
+import { perf } from '../engine/perf';
+import { flag } from '../engine/flags';
+import { lineageDrifts, neutralGenome, regionGenome, type Drift, type Genome } from './genome';
 
 /** How much traversal furniture each region gets. */
 const TRAVERSAL: Record<string, { mush: number; drift: number; crystals: number; pods: number }> = {
@@ -58,6 +61,9 @@ export class World {
   readonly def: StratumDef;
   readonly radius: number;
   readonly palette: Palette;
+  readonly genome: Genome;
+  /** Why this region's genome differs from its birth genome (narrated on entry). */
+  readonly drifts: Drift[];
   readonly terrain: Terrain;
   /** Chunk-streamed ground (one batched draw call). */
   readonly ground: TerrainStreamer;
@@ -97,6 +103,9 @@ export class World {
     // each region grows its own ground, stone and bark textures
     buildSurfaces(baseSeed);
     this.rng = new Rng(baseSeed ^ 0x51ed);
+    // the World Genome: this seed and region, evolved by every choice already recorded on the run
+    this.genome = flag('genome') ? regionGenome(run.seed, def.id, run) : neutralGenome();
+    this.drifts = flag('genome') ? lineageDrifts(run) : [];
     const rng = this.rng;
 
     this.terrain = new Terrain({
@@ -110,12 +119,18 @@ export class World {
       // boss arenas stay a closed bowl; every other region opens into the infinite Wilds
       wild: !def.boss,
       flavour: def.flora,
+      genome: this.genome,
+      features: { erosion: flag('erosion'), terrace: flag('terrace'), orbit: flag('orbit') },
     });
     this.ground = new TerrainStreamer(this.terrain);
     this.group.add(this.ground.mesh);
     this.physics = new Physics((x, z) => this.terrain.heightAt(x, z));
+    if (this.ground.threaded) this.physics.heightSource = (i, j, size, res) => this.ground.physicsHeights(i, j, size, res);
     this.wilds = this.terrain.wild ? new Wilds(this.terrain, this.physics, this.palette, baseSeed ^ 0x77, this.tetherAnchors) : null;
-    if (this.wilds) this.group.add(this.wilds.group);
+    if (this.wilds) {
+      this.group.add(this.wilds.group);
+      if (this.ground.threaded) this.wilds.surface = (x, z) => this.ground.surfaceAt(x, z);
+    }
     this.colliders.onAdd = (x, z, r) => this.physics.addPillar(x, z, r);
 
     // ---- layout -----------------------------------------------------------------------
@@ -385,9 +400,15 @@ export class World {
 
   /** Stream ground, Wilds and physics around the hero. */
   stream(x: number, z: number) {
+    perf.start('ground');
     this.ground.update(x, z, 2);
+    perf.stop('ground');
+    perf.start('wilds');
     this.wilds?.update(x, z, 1);
+    perf.stop('wilds');
+    perf.start('physics');
     this.physics.streamTerrain(x, z);
+    perf.stop('physics');
   }
 
   /** Build everything around (x, z) at once (region entry, respawn, fast travel). */

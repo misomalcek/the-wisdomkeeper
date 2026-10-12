@@ -146,6 +146,11 @@ export class Wilds {
   /** Pickups waiting for the game to place them (drained every frame). */
   readonly pickups: WildPickup[] = [];
   built = 0;
+  /**
+   * Height of the drawn ground for decoration (cords, tufts): the streamer's cached grids when available, so a flora
+   * chunk does not re-evaluate the field ~1000 times. Solid things (trees, pickups) keep the exact field.
+   */
+  surface: (x: number, z: number) => number;
 
   constructor(
     private terrain: Terrain,
@@ -154,6 +159,7 @@ export class Wilds {
     private seed: number,
     private anchors: TetherAnchor[],
   ) {
+    this.surface = (x, z) => terrain.heightAt(x, z);
     for (let i = SLOTS - 1; i >= 0; i--) this.freeSlots.push(i);
     this.bark = new Pool(new THREE.CylinderGeometry(0.62, 1, 1, 5, 1, true).translate(0, 0.5, 0), occlusionFade(barkMaterial({ roughness: 0.78, side: THREE.DoubleSide })), 1600);
     this.tips = new Pool(new THREE.OctahedronGeometry(0.3, 0), occlusionFade(selfLit(1.25, { roughness: 0.4 })), 640, false);
@@ -303,7 +309,6 @@ export class Wilds {
   }
 
   private writeVeins(slot: number, segs: { x0: number; z0: number; x1: number; z1: number; kind: number }[]) {
-    const t = this.terrain;
     const base = slot * this.veinPer * 2;
     for (let k = 0; k < this.veinPer; k++) {
       const v = (base + k * 2) * 3;
@@ -313,10 +318,10 @@ export class Wilds {
         continue;
       }
       this.veinPos[v] = s.x0;
-      this.veinPos[v + 1] = t.heightAt(s.x0, s.z0) + 0.1;
+      this.veinPos[v + 1] = this.surface(s.x0, s.z0) + 0.1;
       this.veinPos[v + 2] = s.z0;
       this.veinPos[v + 3] = s.x1;
-      this.veinPos[v + 4] = t.heightAt(s.x1, s.z1) + 0.1;
+      this.veinPos[v + 4] = this.surface(s.x1, s.z1) + 0.1;
       this.veinPos[v + 5] = s.z1;
       this.veinKind[base + k * 2] = this.veinKind[base + k * 2 + 1] = s.kind;
     }
@@ -415,12 +420,11 @@ export class Wilds {
   }
 
   private tuftPatch(slot: number, x: number, z: number, rng: Rng, n: number, a: THREE.Color, b: THREE.Color) {
-    const t = this.terrain;
     for (let k = 0; k < n; k++) {
       const px = x + rng.range(-3, 3);
       const pz = z + rng.range(-3, 3);
       if (!this.wildAt(px, pz)) continue;
-      _o.position.set(px, t.heightAt(px, pz) - 0.05, pz);
+      _o.position.set(px, this.surface(px, pz) - 0.05, pz);
       _o.rotation.set(rng.range(-0.2, 0.2), rng.range(0, TAU), rng.range(-0.2, 0.2));
       _o.scale.set(rng.range(0.6, 1.2), rng.range(0.35, 1.1), rng.range(0.6, 1.2));
       _o.updateMatrix();

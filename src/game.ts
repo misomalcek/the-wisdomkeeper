@@ -39,6 +39,8 @@ import { LAYER } from './physics/physics';
 import { StoryDeck, addPunch, buildStorycard, lastPunchOf, mergeLibrary, runFromCard, type Storycard } from './systems/storycards';
 import { StorycardsPanel } from './ui/storycardsPanel';
 import { setSurfaceDetail } from './engine/proctex';
+import { perf } from './engine/perf';
+import { flagState } from './engine/flags';
 
 type Mode = 'title' | 'prologue' | 'play' | 'choice' | 'transition' | 'dead' | 'ending';
 
@@ -708,6 +710,7 @@ export class Game {
     const raw = (ms - this.last) / 1000;
     this.last = ms;
     if (raw <= 0 || raw > 5) return;
+    perf.begin();
     const dt = Math.min(raw, 0.05);
     this.gfx.adapt(raw);
     this.handleGlobalKeys();
@@ -724,8 +727,9 @@ export class Game {
     this.gfx.camera.updateMatrixWorld();
     this.gfx.followShadow(this.player.x, this.player.y, this.player.z);
     updateOcclusion(this.gfx.renderer, this.gfx.camera, this.tmp.set(this.player.x, this.player.y + 1, this.player.z));
-    this.gfx.render();
+    if (!this.debugNoRender) this.gfx.render();
     this.input.endFrame();
+    perf.end();
   };
 
   private handleGlobalKeys() {
@@ -2429,6 +2433,15 @@ export class Game {
     this.player.place(x, this.world.terrain.heightAt(x, z), z);
     this.world.prime(x, z);
     this.cam.snap(this.player.cameraTarget);
+  }
+  /** Benchmarks: skip rendering so frame times measure the main thread alone (software GL would swamp them). */
+  debugNoRender = false;
+  /** Profiler and P1 feature-flag state for the benchmark scripts. */
+  get debugPerf() {
+    return perf;
+  }
+  debugFlags() {
+    return flagState();
   }
   debugClearCamps() {
     for (const c of this.camps) for (const e of c.enemies) if (!e.dead) this.combat.killEnemy(e);

@@ -6,23 +6,14 @@ import {
 } from 'three/tsl';
 import { worldTime, fbm2, conduction, proceduralBump, hash21, type N } from '../engine/materials';
 import { fractalTexture, surfaceDetail, surfaces } from '../engine/proctex';
-import { WildField } from './gen/field';
-import { fbm, makeNoise2D, type Noise2D } from '../util/rng';
-import { smoothstep } from '../util/math';
+import { GroundShape, type ShapeOpts } from './gen/shape';
+import type { WildField } from './gen/field';
 import type { Palette } from '../story/strata';
 
-export interface TerrainOpts {
-  radius: number;
-  amp: number;
-  freq: number;
-  river: boolean;
-  seed: number;
+export interface TerrainOpts extends ShapeOpts {
   palette: Palette;
   /** 0..1 how strongly the circuit-grid shows through. */
   grid: number;
-  /** Open the region into the infinite Wilds (false keeps the bowl rim, for boss arenas). */
-  wild: boolean;
-  flavour: 'seedbed' | 'river' | 'canopy' | 'mirror' | 'return';
 }
 
 export const MAX_LIGHTS = 10;
@@ -36,33 +27,22 @@ export const MAX_CORRUPT = 8;
 export class Terrain {
   /** Shared ground material; the chunk streamer draws every chunk with it. */
   readonly material: MeshStandardNodeMaterial;
-  /** Infinite Wilds beyond the authored core (null for bounded boss arenas). */
-  readonly wild: WildField | null;
+  /** The pure ground shape (also rebuilt by the chunk workers from `shapeOpts`). */
+  readonly shape: GroundShape;
+  readonly shapeOpts: ShapeOpts;
   readonly radius: number;
-  private noise: Noise2D;
-  private amp: number;
-  private freq: number;
-  private river: boolean;
-  private riverA: number;
-  private riverF: number;
-  private riverP: number;
-  private riverW: number;
   private u: Record<string, N>;
+  /** Infinite Wilds beyond the authored core (null for bounded boss arenas). */
+  get wild(): WildField | null {
+    return this.shape.wild;
+  }
   private lightArr: THREE.Vector4[] = Array.from({ length: MAX_LIGHTS }, () => new THREE.Vector4(0, -9999, 0, 0));
   private corruptArr: THREE.Vector4[] = Array.from({ length: MAX_CORRUPT }, () => new THREE.Vector4(0, 0, 1, 0));
 
   constructor(o: TerrainOpts) {
     this.radius = o.radius;
-    this.noise = makeNoise2D(o.seed);
-    this.amp = o.amp;
-    this.freq = o.freq;
-    this.river = o.river;
-    this.riverA = o.radius * 0.2;
-    this.riverF = 0.032;
-    this.riverP = (o.seed % 628) / 100;
-    this.riverW = 9;
-
-    this.wild = o.wild ? new WildField(o.seed, o.flavour) : null;
+    this.shapeOpts = { radius: o.radius, amp: o.amp, freq: o.freq, river: o.river, seed: o.seed, wild: o.wild, flavour: o.flavour, genome: o.genome, features: o.features };
+    this.shape = new GroundShape(this.shapeOpts);
 
     const c = (hex: number) => new THREE.Color(hex);
     this.u = {
@@ -214,74 +194,39 @@ export class Terrain {
     return m;
   }
 
-  private centerX(z: number) {
-    return this.riverA * Math.sin(z * this.riverF + this.riverP) + this.riverA * 0.4 * Math.sin(z * this.riverF * 2.3 + 1.7);
-  }
-
-  /** 0 outside the river, 1 in the channel's core. */
+  /** 0 outside the river (or a lake of light), 1 in the channel's core. */
   riverAt(x: number, z: number) {
-    if (!this.river) return 0;
-    const d = Math.abs(x - this.centerX(z));
-    return 1 - smoothstep(this.riverW * 0.35, this.riverW, d);
+    return this.shape.riverAt(x, z);
   }
 
-  /** Writes the current's direction (xz plane, +z downstream) scaled by strength. */
+  /** Writes the current's direction (xz plane, +z downstream; circling on isle lakes) scaled by strength. */
   flowAt(x: number, z: number, out: THREE.Vector2) {
-    const r = this.riverAt(x, z);
-    if (r <= 0) return out.set(0, 0);
-    const dx = (this.centerX(z + 1) - this.centerX(z - 1)) / 2;
-    out.set(dx, 1).normalize().multiplyScalar(r * 5.5);
+    this.shape.flowAt(x, z, out);
     return out;
   }
 
   /** Distance from the river's centre line (∞ when the region has no river). */
   riverDist(x: number, z: number) {
-    return this.river ? Math.abs(x - this.centerX(z)) : Infinity;
+    return this.shape.riverDist(x, z);
   }
 
   /** 0 inside the authored core → 1 fully in the Wilds. */
   wildness(x: number, z: number) {
-    if (!this.wild) return 0;
-    return smoothstep(this.radius * 0.92, this.radius * 1.7, Math.hypot(x, z));
-  }
-
-  private coreHeight(x: number, z: number, r: number) {
-    let h = fbm(this.noise, x * this.freq, z * this.freq, 4) * this.amp * 2;
-    h *= 0.3 + 0.7 * smoothstep(5, 22, r);
-    return h;
+    return this.shape.wildness(x, z);
   }
 
   heightAt(x: number, z: number) {
-    const r = Math.hypot(x, z);
-    let h = this.coreHeight(x, z, r);
-    if (!this.wild) {
-      h += smoothstep(this.radius * 0.94, this.radius * 1.35, r) * (14 + this.radius * 0.3);
-    } else {
-      const t = smoothstep(this.radius * 0.92, this.radius * 1.7, r);
-      if (t > 0) {
-        let wh = this.wild.height(x, z);
-        // rivers keep flowing through the Wilds and carve their own valleys
-        if (this.river) wh *= smoothstep(this.riverW, this.riverW * 5, this.riverDist(x, z));
-        h += (wh - h) * t;
-      }
-    }
-    if (this.river) h -= this.riverAt(x, z) * 1.6;
-    return h;
+    return this.shape.heightAt(x, z);
   }
 
   /** Null corruption baked into the ground of Blight biomes (0..1). */
   blightAt(x: number, z: number) {
-    if (!this.wild) return 0;
-    const t = this.wildness(x, z);
-    return t > 0 ? this.wild.biomeAt(x, z).blight * t : 0;
+    return this.shape.blightAt(x, z);
   }
 
   /** Terrain steepness |∇h| (1 ≈ 45°). */
   slopeAt(x: number, z: number) {
-    const e = 0.6;
-    const dx = (this.heightAt(x + e, z) - this.heightAt(x - e, z)) / (2 * e);
-    const dz = (this.heightAt(x, z + e) - this.heightAt(x, z - e)) / (2 * e);
-    return Math.hypot(dx, dz);
+    return this.shape.slopeAt(x, z);
   }
 
   /** Surface height of the river of light (valid where riverAt is high). */
