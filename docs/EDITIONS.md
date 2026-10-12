@@ -34,7 +34,9 @@ The fork never edits this repository's files. It attaches through these points, 
    game owns the clamp, so an edition can vary the Null without leaving the game's balance.
 4. **`recordMutation`** (`src/world/genome.ts`) records a region's genome mutation on the run, clamped; the land is built
    from it here too, so a card from either edition grows the same world.
-5. **`runExtensions.evolution`** in `src/systems/storycards.ts`, with `RunState.evolution`, lets an edition keep
+5. **`Game.setQuality`** switches the quality tier and remembers it; an edition may pick a machine's first tier with
+   it (the player's own choice in the pause menu, or `?quality=`, always wins).
+6. **`runExtensions.evolution`** in `src/systems/storycards.ts`, with `RunState.evolution`, lets an edition keep
    its own block on a storycard. Without a registered validator, the web build drops the block.
 
 ### Rules for changing it
