@@ -41,7 +41,18 @@ export class StorycardsPanel {
   private status = $('sc-status');
   private file = $('sc-file') as HTMLInputElement;
   private h!: StorycardsHandlers;
-  private card: Storycard | null = null;
+  private shown: Storycard | null = null;
+
+  /** The card as last rendered (null when there is no story in progress). */
+  get card(): Storycard | null {
+    return this.shown;
+  }
+
+  /**
+   * An edition may save cards its own way (the desktop edition's native save dialog). It resolves to the name it
+   * saved under, or null when the player cancelled. Without it, downloads go through the browser.
+   */
+  saveFile: ((name: string, text: string, ext: 'json' | 'md') => Promise<string | null>) | null = null;
 
   bind(h: StorycardsHandlers) {
     this.h = h;
@@ -79,11 +90,11 @@ export class StorycardsPanel {
 
   /** Re-render from the handlers (call when opening the overlay). */
   render() {
-    this.card = this.h.current();
+    this.shown = this.h.current();
     this.renderCurrent();
     this.renderDeck();
-    (document.getElementById('sc-dl-json') as HTMLButtonElement).disabled = !this.card;
-    (document.getElementById('sc-dl-md') as HTMLButtonElement).disabled = !this.card;
+    (document.getElementById('sc-dl-json') as HTMLButtonElement).disabled = !this.shown;
+    (document.getElementById('sc-dl-md') as HTMLButtonElement).disabled = !this.shown;
   }
 
   setStatus(msg: string, kind: 'ok' | 'error' | '' = '') {
@@ -94,7 +105,7 @@ export class StorycardsPanel {
   private renderCurrent() {
     const box = $('sc-current');
     box.replaceChildren();
-    const c = this.card;
+    const c = this.shown;
     if (!c) {
       box.append(el('p', 'empty', 'No story in progress. Begin one, or upload a storycard to carry a story over from another device.'));
       return;
@@ -152,9 +163,16 @@ export class StorycardsPanel {
   private download(ext: 'json' | 'md') {
     // re-punch right before saving so the file holds the very latest state
     this.render();
-    const c = this.card;
+    const c = this.shown;
     if (!c) return;
     const text = ext === 'json' ? storycardToJSON(c) : storycardToMarkdown(c);
+    if (this.saveFile) {
+      this.saveFile(storycardFilename(c, ext, new Date()), text, ext).then(
+        (name) => name && this.setStatus(`Saved ${name}`, 'ok'),
+        (e) => this.setStatus(`The card could not be saved (${String(e)}).`, 'error'),
+      );
+      return;
+    }
     const blob = new Blob([text], { type: ext === 'json' ? 'application/json' : 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');

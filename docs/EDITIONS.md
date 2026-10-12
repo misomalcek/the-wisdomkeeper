@@ -29,7 +29,7 @@ The fork never edits this repository's files. It attaches through these points, 
    `VITE_EDITION=evolutions`. In this repository the glob is empty, so the web bundle carries nothing of it.
 2. **`Game.hooks`** (`src/systems/hooks.ts`) is an event bus for what happens in play: stratum, transition, tick, spawn,
    kill, hurt, death, respawn, remembrance, pylon, echo, save and story. It also holds `travelGate`, which lets an edition bar
-   fast travel to a place. `Game.campStates`, `Game.inTransition` and `Game.storycards` give access without reaching into private fields.
+   fast travel to a place. `Game.campStates`, `Game.inTransition` and `Game.storycards` (its `card` and `saveFile`) give access without reaching into private fields.
 3. **`runExtensions.evolution`** in `src/systems/storycards.ts`, with `RunState.evolution`, lets an edition keep
    its own block on a storycard. Without a registered validator, the web build drops the block.
 
