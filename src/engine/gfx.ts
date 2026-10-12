@@ -15,6 +15,21 @@ const QUALITY: Record<Quality, { ratio: number; ao: boolean; shadows: boolean; s
   ultra: { ratio: 1.5, ao: true, shadows: true, shadowSize: 4096, aa: true },
 };
 
+export const QUALITIES = Object.keys(QUALITY) as Quality[];
+
+/** Where the player's own quality choice is kept (the settings record; `game.ts` writes it). */
+export const SETTINGS_KEY = 'wk.settings.v1';
+
+/** The quality the player chose in the pause menu (or the desktop edition chose for this machine), if any. */
+export function savedQuality(): Quality | null {
+  try {
+    const q = (JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}') as { quality?: string }).quality;
+    return q && q in QUALITY ? (q as Quality) : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * WebGPU renderer (Three.js r186, TSL node materials) with an automatic WebGL2 backend where WebGPU is missing.
  * Post-processing runs as a node graph: scene pass with MRT normals → GTAO → bloom → FXAA → tone-mapped output.
@@ -67,7 +82,7 @@ export class Gfx {
     const q = new URLSearchParams(location.search);
     this.renderer = new WebGPURenderer({ antialias: false, powerPreference: 'high-performance', forceWebGL });
     const coarse = matchMedia('(pointer: coarse)').matches;
-    this.quality = (q.get('quality') as Quality) || (coarse ? 'low' : 'high');
+    this.quality = (q.get('quality') as Quality) || savedQuality() || (coarse ? 'low' : 'high');
     if (!QUALITY[this.quality]) this.quality = 'high';
     this.pixelRatio = Number(q.get('scale')) || Math.min(window.devicePixelRatio || 1, QUALITY[this.quality].ratio);
     this.adaptive = !q.has('noadapt') && !q.has('scale');

@@ -105,6 +105,24 @@ export interface RunState {
   punches?: Punch[];
   /** An edition's own block, kept only where `runExtensions.evolution` validates it (the web build drops it). */
   evolution?: unknown;
+  /** Genome mutations decided for a region on this run (by the desktop mind, or a rule); replayed on load. */
+  mutations?: RegionMutation[];
+}
+
+/** Who reshaped a region's genome. */
+export type MutationAuthor = 'warden' | 'symbiote' | 'rule';
+
+/**
+ * A recorded genome mutation for one region: normalised steps per gene (see `world/genome.ts`), clamped there to
+ * at most three genes and ±0.2 each. Recorded, never re-derived, so both editions grow the same land from a card.
+ */
+export interface RegionMutation {
+  stratum: StratumId;
+  cycle: number;
+  m: Record<string, number>;
+  by: MutationAuthor;
+  /** Story words for the region-entry narration ("the Warden quickened the Null"). */
+  why: string;
 }
 
 export type PunchKind =

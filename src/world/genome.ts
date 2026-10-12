@@ -11,7 +11,7 @@
  * Every gene lives in its natural units inside [min, max]; mutations are applied in the normalised 0..1 coordinate
  * of that range and clamped, so one "step" means the same thing for every gene.
  */
-import type { RunState, StratumId } from '../types';
+import type { RegionMutation, RunState, StratumId } from '../types';
 import { Rng, hashString } from '../util/rng';
 import { clamp } from '../util/math';
 
@@ -91,11 +91,38 @@ export interface Drift {
   why: string;
 }
 
+/** The run fields the genome of a region depends on. */
+export type LineageRun = Pick<RunState, 'remembrances' | 'history' | 'latent' | 'cycle' | 'tiers' | 'mutations'>;
+
+/** A recorded mutation may move at most this many genes, each by at most `MAX_STEP` (normalised units). */
+export const MAX_GENES = 3;
+export const MAX_STEP = 0.2;
+/** Recorded mutations kept on a run (the oldest drop first). */
+export const MAX_MUTATIONS = 48;
+
+/** Clamps a proposed mutation: known genes only, finite, ±MAX_STEP, the MAX_GENES largest steps. */
+export function clampMutation(m: Record<string, unknown>): Mutation {
+  const steps = GENE_KEYS.flatMap((k) => {
+    const v = m[k];
+    return typeof v === 'number' && Number.isFinite(v) && v !== 0 ? [[k, clamp(v, -MAX_STEP, MAX_STEP)] as const] : [];
+  });
+  steps.sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]) || GENE_KEYS.indexOf(a[0]) - GENE_KEYS.indexOf(b[0]));
+  return Object.fromEntries(steps.slice(0, MAX_GENES)) as Mutation;
+}
+
+/** Records a region mutation on the run (clamped; one per region and cycle, the later replacing the earlier). */
+export function recordMutation(run: Pick<RunState, 'mutations'>, r: RegionMutation) {
+  const m = clampMutation(r.m);
+  const list = (run.mutations ??= []).filter((x) => !(x.stratum === r.stratum && x.cycle === r.cycle));
+  list.push({ ...r, m: m as Record<string, number>, why: r.why.slice(0, 200) });
+  run.mutations = list.slice(-MAX_MUTATIONS);
+}
+
 /**
  * What the run so far does to the next region's genome. Pure function of recorded run state, so loading a Storycard
  * reproduces it. Returns the individual drifts (for the narration) in a fixed order.
  */
-export function lineageDrifts(run: Pick<RunState, 'remembrances' | 'history' | 'latent' | 'cycle' | 'tiers'>): Drift[] {
+export function lineageDrifts(run: LineageRun, stratum?: StratumId): Drift[] {
   const out: Drift[] = [];
   const emb = run.remembrances.filter((r) => r === 'embrace').length;
   const pur = run.remembrances.length - emb;
@@ -108,6 +135,8 @@ export function lineageDrifts(run: Pick<RunState, 'remembrances' | 'history' | '
   const l = run.latent;
   if (l.some((v) => Math.abs(v) > 0.05)) out.push({ m: { ridge: 0.12 * l[0], growth: 0.1 * l[1], vegHue: 0.12 * l[2], isleSize: 0.1 * l[3] }, why: 'the Mycelial Mind answered your style' });
   if (run.cycle > 1) out.push({ m: { juliaA: 0.137 * (run.cycle - 1), isles: 0.03 * (run.cycle - 1) }, why: `cycle ${run.cycle}: the soil remembers older worlds` });
+  // what the minds decided for this region, in the order they decided it (earlier cycles included: lineage)
+  if (stratum) for (const r of run.mutations ?? []) if (r.stratum === stratum) out.push({ m: clampMutation(r.m), why: r.why });
   return out;
 }
 
@@ -126,9 +155,9 @@ export function strongestDrift(ds: Drift[]): Drift | null {
 }
 
 /** The genome of a region on this run: birth genome plus every recorded drift. */
-export function regionGenome(seed: number, stratum: StratumId, run?: Pick<RunState, 'remembrances' | 'history' | 'latent' | 'cycle' | 'tiers'>): Genome {
+export function regionGenome(seed: number, stratum: StratumId, run?: LineageRun): Genome {
   let g = baseGenome(seed, stratum);
-  if (run) for (const d of lineageDrifts(run)) g = mutate(g, d.m);
+  if (run) for (const d of lineageDrifts(run, stratum)) g = mutate(g, d.m);
   return g;
 }
 

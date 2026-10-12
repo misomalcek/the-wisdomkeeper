@@ -13,6 +13,11 @@ import type { Pylon } from '../world/structures';
 export interface GameEvents {
   /** A stratum was entered (new, continued or re-entered), after the world was built. */
   stratum: { index: number; id: string };
+  /**
+   * A gate transition toward stratum `next` began. The next region is built when it ends, so a listener may still
+   * record a genome mutation for it (`recordMutation` in `world/genome.ts`), synchronously.
+   */
+  transition: { next: number; id: string };
   /** One play update, with the frame's dt before slow motion. */
   tick: { dt: number };
   /** A spawn the game made (camps, ambient waves, events, editions' `queueSpawn`). */

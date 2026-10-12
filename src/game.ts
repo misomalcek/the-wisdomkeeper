@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Affinity, BossVariant, Choice, EnemyKind, Item, LibraryEntry, PlayStats, PunchKind, Remembrance, RunState, Skin } from './types';
 import { setPortraitRenderer } from './ui/portrait';
-import { Gfx } from './engine/gfx';
+import { Gfx, QUALITIES, SETTINGS_KEY, savedQuality, type Quality } from './engine/gfx';
 import { ThirdPersonCam } from './engine/camera';
 import { Input } from './engine/input';
 import { AudioEngine } from './engine/audio';
@@ -42,14 +42,14 @@ import { StorycardsPanel } from './ui/storycardsPanel';
 import { setSurfaceDetail } from './engine/proctex';
 import { strongestDrift } from './world/genome';
 import { perf } from './engine/perf';
-import { flagState } from './engine/flags';
+import { flagState, setFlagTier } from './engine/flags';
 import { GameHooks } from './systems/hooks';
 
 type Mode = 'title' | 'prologue' | 'play' | 'choice' | 'transition' | 'dead' | 'ending';
 
 const SAVE_KEY = 'wk.run.v2';
 const LIB_KEY = 'wk.library.v1';
-const SET_KEY = 'wk.settings.v1';
+const SET_KEY = SETTINGS_KEY;
 const HOT = new THREE.Color(0xff3b7a);
 const TOTAL_REMEMBRANCES = 7;
 
@@ -229,12 +229,16 @@ export class Game {
     this.ui.setMuteLabel(this.audio.muted);
     this.ui.setBloomLabel(this.gfx.bloomEnabled);
   }
+  /** The quality the player picked (kept in settings), or undefined for the device default. */
+  private quality: Quality | undefined = savedQuality() ?? undefined;
+
   private saveSettings() {
     store.set(SET_KEY, {
       vol: this.audio.volume,
       muted: this.audio.muted,
       bloom: this.gfx.bloomEnabled,
       sens: Math.round((this.cam.sens / 0.0022) * 100),
+      ...(this.quality ? { quality: this.quality } : {}),
     });
   }
   saveRun() {
@@ -301,6 +305,16 @@ export class Game {
       ui.setMuteLabel(this.audio.toggleMute());
       this.saveSettings();
     });
+    ui.on('btn-quality', () => {
+      // look only: the renderer switches now, world budgets (living field, Physarum, fine trees) from the next region
+      const q = QUALITIES[(QUALITIES.indexOf(this.gfx.quality) + 1) % QUALITIES.length];
+      this.quality = q;
+      this.gfx.setQuality(q);
+      setFlagTier(q);
+      ui.setQualityLabel(q);
+      ui.toast(q === 'ultra' ? 'Ultra: for desktops. Wider living field and network from the next region' : `Quality: ${q}`);
+      this.saveSettings();
+    });
     ui.on('btn-bloom', () => {
       this.gfx.setBloom(!this.gfx.bloomEnabled);
       ui.setBloomLabel(this.gfx.bloomEnabled);
@@ -350,6 +364,7 @@ export class Game {
     }
     this.ui.setMuteLabel(this.audio.muted);
     this.ui.setBloomLabel(this.gfx.bloomEnabled);
+    this.ui.setQualityLabel(this.gfx.quality);
   }
 
   /** After closing a sub-overlay: back to the pause menu if paused from there, else resume. */
@@ -603,7 +618,9 @@ export class Game {
     }
 
     // the World Genome: the strongest way this run's choices reshaped the region is told once and punched on the card
-    const drift = this.def.boss ? null : strongestDrift(this.world.drifts);
+    // a mind's decision for this region is news; otherwise the strongest inherited drift is told
+    const decided = this.run.mutations?.filter((r) => r.stratum === this.def.id && r.cycle === this.run.cycle).pop();
+    const drift = this.def.boss ? null : decided ? { m: decided.m, why: decided.why } : strongestDrift(this.world.drifts);
     if (lastPunchOf(this.run, 'stratum')?.stratum !== index) {
       this.punch('stratum', `Entered ${this.def.name} — ${this.def.act}`);
       if (drift) this.punch('land', `${this.def.name} grew from ${drift.why}`);
@@ -650,6 +667,7 @@ export class Game {
     const gatePos = g ? g.pos.clone().setY(g.group.position.y) : this.player.group.position.clone();
     this.trans = { t: 0, next, gate: gatePos };
     this.mode = 'transition';
+    this.hooks.emit('transition', { next, id: STRATA[next]?.id ?? '' });
     this.ui.setHudVisible(false);
     this.ui.fade(true, 'white', 1500);
     this.audio.sfx('gate');
