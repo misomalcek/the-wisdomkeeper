@@ -382,6 +382,8 @@ export function lasherStep(e: Enemy, g: Game, dt: number, gh: number, dxz: numbe
   const p = g.player;
   const a = e.aux;
   e.cd -= dt;
+  // shielded only while it tunnels and rises (set below), so it wears off once the bloom is up
+  e.invuln = Math.max(0, e.invuln - dt);
   if (e.state === 'under') {
     e.invuln = 0.2;
     // tunnel to a spot 7-11 m from the hero
@@ -394,7 +396,8 @@ export function lasherStep(e: Enemy, g: Game, dt: number, gh: number, dxz: numbe
     e.z += (hz / hd) * sp * dt;
     if (Math.random() < 0.6) g.particles.emit(e.x + (Math.random() - 0.5), gh + 0.2, e.z + (Math.random() - 0.5), (Math.random() - 0.5) * 2, 2.5, (Math.random() - 0.5) * 2, SOIL, 0.3, 0.5, 6);
     e.st -= dt;
-    if (e.st <= 0 && hd < 2) {
+    // a hero who keeps moving never lets it settle on the spot: after a while it bursts up wherever it has got to
+    if (e.st <= 0 && (hd < 2 || e.st < -2.5)) {
       e.state = 'rise';
       e.st = 0.9;
       g.audio.sfx('warn');
