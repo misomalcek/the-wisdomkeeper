@@ -34,6 +34,8 @@ const LOOK: Record<string, Record<Tier, boolean>> = {
   coast: { low: false, medium: true, high: true, ultra: true },
   /** Living corruption / purification fronts (excitable medium around the hero). */
   living: { low: true, medium: true, high: true, ultra: true },
+  /** Physarum transport network: veins of light that link the landmarks (own worker). */
+  network: { low: true, medium: true, high: true, ultra: true },
   /** Glyph atlas regenerated per region from the genome's Julia constant. */
   glyphs: { low: true, medium: true, high: true, ultra: true },
   /** Vertex wind on Wilds flora. */
@@ -43,7 +45,7 @@ const LOOK: Record<string, Record<Tier, boolean>> = {
 };
 
 export type ShapeFlag = keyof typeof SHAPE;
-export type LookFlag = 'workers' | 'oklab' | 'coast' | 'living' | 'glyphs' | 'wind' | 'horizon';
+export type LookFlag = 'workers' | 'oklab' | 'coast' | 'living' | 'glyphs' | 'wind' | 'horizon' | 'network';
 export type Flag = ShapeFlag | LookFlag;
 export const ALL_FLAGS = [...Object.keys(SHAPE), ...Object.keys(LOOK)] as Flag[];
 

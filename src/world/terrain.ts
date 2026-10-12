@@ -21,6 +21,18 @@ export interface TerrainOpts extends ShapeOpts {
 
 export const MAX_LIGHTS = 10;
 const luminance = (c: THREE.Color) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+
+/** A toroidal two-channel byte map the ground shader samples in world space (repeat-wrapped, linear). */
+function rgTexture(size: number) {
+  const data = new Uint8Array(size * size * 2);
+  const tex = new THREE.DataTexture(data, size, size, THREE.RGFormat, THREE.UnsignedByteType);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = tex.minFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.needsUpdate = true;
+  return { tex, data, size };
+}
 export const MAX_CORRUPT = 8;
 
 /**
@@ -44,6 +56,8 @@ export class Terrain {
   private corruptArr: THREE.Vector4[] = Array.from({ length: MAX_CORRUPT }, () => new THREE.Vector4(0, 0, 1, 0));
   /** Living-field texture (R corruption, G purification glow), written by the world's LivingField; null when off. */
   readonly living: { tex: THREE.DataTexture; data: Uint8Array; size: number; cell: number } | null = null;
+  /** Physarum vein map (R strength, G distance along the veins from a food source), written by the world's Network. */
+  readonly network: { tex: THREE.DataTexture; data: Uint8Array; size: number; cell: number } | null = null;
   /** The Orbit Isle whose full-resolution coastline the shader draws (the nearest one to the hero). */
   private coastIsle: Isle | null = null;
 
@@ -66,20 +80,18 @@ export class Terrain {
       // landform colours are authored as daylight earth; scale them to the region's own ground brightness
       lfL: uniform(Math.min(1, Math.max(0.12, luminance(c(o.palette.groundHigh)) * 4.5))),
       livCentre: uniform(new THREE.Vector2()),
+      // far away until the first vein map arrives, so nothing shows before then
+      netCentre: uniform(new THREE.Vector2(1e7, 1e7)),
       // x, z, k = 1.6/R (0: no isle), mirror; cos, sin of rotation, c
       isleA: uniform(new THREE.Vector4(0, 0, 0, 1)),
       isleB: uniform(new THREE.Vector4(1, 0, 0, 0)),
     };
     if (flag('living')) {
-      const size = flagTier() === 'low' ? 96 : 128;
-      const data = new Uint8Array(size * size * 2);
-      const tex = new THREE.DataTexture(data, size, size, THREE.RGFormat, THREE.UnsignedByteType);
-      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-      tex.magFilter = tex.minFilter = THREE.LinearFilter;
-      tex.generateMipmaps = false;
-      tex.colorSpace = THREE.NoColorSpace;
-      tex.needsUpdate = true;
-      this.living = { tex, data, size, cell: 1.5 };
+      this.living = { ...rgTexture(flagTier() === 'low' ? 96 : 128), cell: 1.5 };
+    }
+    if (o.wild && flag('network')) {
+      const low = flagTier() === 'low';
+      this.network = { ...rgTexture(low ? 320 : 512), cell: low ? 8 : 6 };
     }
     this.material = this.buildMaterial();
   }
@@ -141,6 +153,17 @@ export class Terrain {
       livU = lv.g.mul(fade);
     }
     const cor: N = max(max(corF(), blightAttr), livC);
+    // the Physarum network: vein strength and the distance along the veins from the nearest food source
+    let net: N = float(0);
+    let netD: N = float(0);
+    if (this.network) {
+      const NW = this.network;
+      const nv: N = texture(NW.tex, w.xz.div(NW.size * NW.cell));
+      const off: N = abs(w.xz.sub(u.netCentre));
+      const half = NW.size * NW.cell * 0.5;
+      net = nv.r.mul(float(1).sub(sstep(half * 0.8, half * 0.97, max(off.x, off.y))));
+      netD = nv.g;
+    }
 
     // ---- albedo: height banding, slope rock, eye-level mottling, Null stain
     const h = sstep(-2, 7, w.y);
@@ -169,7 +192,10 @@ export class Terrain {
     albedo = mix(albedo, rock, slope.mul(0.85));
     // landforms: bare rock and frost on the ranges, banded strata in the canyonlands, rippled sand on the dunes
     const lf = this.landformLook(albedo, attribute('aForm', 'vec4'), dist);
-    albedo = mix(lf.albedo, color(0x0a0003), cor.mul(0.75));
+    albedo = lf.albedo;
+    // where the network runs the ground is trodden: darker, bare of moss, a faint sheen of the accent
+    if (this.network) albedo = mix(albedo, albedo.mul(0.55).add(u.accent.mul(0.025)), sstep(0.25, 0.75, net).mul(0.8));
+    albedo = mix(albedo, color(0x0a0003), cor.mul(0.75));
     if (surfaceDetail > 0) {
       const relief: N = pebbles.mul(0.5).sub(cracks.mul(0.9)).add(moss.mul(0.2)).add(slope.mul(strata.mul(0.8).sub(st.b.mul(0.6)))).add(lf.relief);
       m.normalNode = proceduralBump(relief.mul(float(1).sub(sstep(14, 45, dist))), 0.09);
@@ -218,6 +244,24 @@ export class Terrain {
     const veins = pow(float(1).sub(vv), float(16)).mul(sstep(0.42, 0.62, fbm2(w.xz.mul(0.11).add(t.mul(0.02))))); // broken into creeping patches
     const cpulse = sin(t.mul(1.6).add(w.x.mul(0.1))).mul(0.4).add(0.6);
     emit = mix(emit, emit.mul(0.25), cor).add(u.nullCol.mul(veins.mul(0.5).mul(cpulse).add(0.02)).mul(cor));
+    if (this.network) {
+      // veins: the trail's own iso-lines are drawn as hair-thin filaments, so every vein is a bundle of strands that
+      // fan out into growth rings around the food it feeds on (as a plasmodium does); its crest burns brightest, and
+      // packets of light run outward from every food source along the distance channel
+      const lv: N = net.mul(5);
+      const cw: N = max(fwidth(lv), float(1e-3));
+      const strands: N = float(1).sub(sstep(cw.mul(0.6), cw.mul(1.8), abs(fract(lv.sub(0.5)).sub(0.5)))).mul(sstep(0.22, 0.42, net));
+      // the crest: where a vein saturates into a plateau (around a food source) only its rim lights, like a tube wall
+      const crest: N = sstep(0.8, 0.9, net).mul(float(1).sub(sstep(0.95, 0.995, net)));
+      const halo: N = sstep(0.2, 0.8, net);
+      const fine: N = float(1).sub(sstep(120, 420, dist));
+      const pk: N = pow(sin(netD.mul(Math.PI * 2 * 8).sub(t.mul(2.4))).mul(0.5).add(0.5), float(8));
+      const nc: N = mix(u.accent, u.accent2, pk.mul(0.7));
+      const lit: N = strands.mul(fine).mul(0.4).add(crest.mul(0.18)).add(halo.mul(0.035)).add(strands.mul(fine).add(crest).mul(pk).mul(0.6));
+      // the authored heart of the region has its own streams: the network only whispers there
+      const heart: N = sstep(u.radius.mul(0.5), u.radius.mul(1.4), w.xz.length()).mul(0.7).add(0.3);
+      emit = emit.add(nc.mul(lit).mul(heart).mul(float(1).sub(cor)));
+    }
     // purification waves: rings of living light running over the ground, burning the corruption they cross
     if (this.living) emit = emit.add(mix(u.accent, vec3(0.55, 1, 0.85), 0.5).mul(livU.mul(livU).mul(1.3)));
 
@@ -383,6 +427,13 @@ export class Terrain {
   /** Live Null-camp corruption slots (x, z, radius, strength). */
   get corruptions(): readonly THREE.Vector4[] {
     return this.corruptArr;
+  }
+
+  /** Upload a new vein map centred on (cx, cz). */
+  setNetwork(cx: number, cz: number) {
+    if (!this.network) return;
+    (this.u.netCentre.value as THREE.Vector2).set(cx, cz);
+    this.network.tex.needsUpdate = true;
   }
 
   /** Upload the living field's current state (call after it steps). */

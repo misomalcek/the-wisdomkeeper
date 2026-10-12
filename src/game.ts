@@ -6,6 +6,7 @@ import { ThirdPersonCam } from './engine/camera';
 import { Input } from './engine/input';
 import { AudioEngine } from './engine/audio';
 import { Particles } from './engine/particles';
+import { buildAtlas } from './world/atlas';
 import { UI, type HudState, type MapData, type MarkerSet } from './ui/ui';
 import { setupTouch } from './ui/touch';
 import { World, type CampSpec } from './world/world';
@@ -502,6 +503,7 @@ export class Game {
     this.gfx.grace = 3.5;
     setSurfaceDetail(this.gfx.quality);
     this.world = new World(def, this.run);
+    this.placeSeen.clear();
     this.gfx.scene.add(this.world.group);
     this.world.prime(this.world.startPos.x, this.world.startPos.z);
     this.cam.terrainH = (x, z) => this.world.terrain.heightAt(x, z);
@@ -875,18 +877,49 @@ export class Game {
     if (lv.u > 0.5) this.player.res = Math.min(this.derived.maxRes, this.player.res + dt * 3);
     this.particles.update(dt);
     this.fadeCamps(dt);
+    this.announcePlace(dt);
   }
+
+  /** Name the province or formation the hero has just reached (checked twice a second). */
+  private announcePlace(dt: number) {
+    this.placeT -= dt;
+    if (this.placeT > 0 || this.mode !== 'play') return;
+    this.placeT = 0.5;
+    const p = this.world.placeAt(this.player.x, this.player.z);
+    // provinces and formations are remembered apart, so stepping away from a formation doesn't re-announce the land
+    if (!p || this.placeSeen.has(p.key)) return;
+    if (p.key.startsWith('p')) this.placeSeen.forEach((k) => k.startsWith('p') && this.placeSeen.delete(k));
+    this.placeSeen.add(p.key);
+    if (this.placeSeen.size > 64) this.placeSeen.clear();
+    this.ui.place(p.name, p.sub);
+  }
+  private placeT = 0;
+  private placeSeen = new Set<string>();
 
   flowAt(x: number, z: number) {
     const f = this.world.terrain.flowAt(x, z, this.flow);
-    if (f.x === 0 && f.y === 0 && this.world.mycelium.cordAt(x, z, this.cordTmp) > 0) f.set(this.cordTmp.x * 6, this.cordTmp.y * 6);
+    if (f.x === 0 && f.y === 0 && this.cordAt(x, z) > 0) f.set(this.cordTmp.x * 6, this.cordTmp.y * 6);
     return f;
   }
 
-  /** Strength (0..1) of a conducted mycelial cord under (x, z): the hero levitates along it for free. */
+  /**
+   * Strength (0..1) of a conducted flow line under (x, z), a mycelial cord or the core of a Physarum vein: the hero
+   * levitates along it for free. `cordTmp` receives its direction × strength.
+   */
   cordAt(x: number, z: number) {
-    return this.world.mycelium.cordAt(x, z, this.cordTmp);
+    const c = this.world.mycelium.cordAt(x, z, this.cordTmp);
+    const net = this.world.network;
+    if (!net) return c;
+    const v = net.at(x, z, this.netTmp);
+    // only the bright core of a vein conducts
+    const n = Math.max(0, Math.min(1, (v - 0.82) / 0.14));
+    if (n <= c) return c;
+    const k = v > 0 ? n / v : 0;
+    this.cordTmp.x = this.netTmp.x * k;
+    this.cordTmp.y = this.netTmp.y * k;
+    return n;
   }
+  private netTmp = { x: 0, y: 0 };
   private cordTmp = { x: 0, y: 0 };
 
   private buildIntent(dead: boolean): Intent {
@@ -2326,6 +2359,7 @@ export class Game {
       player: { x: p.x, z: p.z, yaw: this.cam.yaw },
       accent: '#' + new THREE.Color(w.palette.accent).getHexString(),
       objective: this.objectivePoint(),
+      atlas: w.terrain.wild?.forms ? () => buildAtlas(w, p.x, p.z) : undefined,
     };
     this.ui.openMap(this.def.name, data, (x, z) => this.mapClick(x, z));
   }

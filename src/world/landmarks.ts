@@ -8,11 +8,10 @@ import { formKey } from './gen/meshgen/index';
 import { protoArrays, protoGeometry, whenProtos } from './protos';
 import { formationMaterial } from '../engine/surfaces';
 import { occlusionFade } from './occlusion';
-import type { GroundSample } from './gen/shape';
-import { Biome } from './gen/field';
+import { SITE_CELL, latticeSite } from './gen/sites';
 
 /** Landmark lattice cell (m) and how many cells out from the hero's are kept (5×5 ≈ 1.9 km across). */
-const CELL = 380;
+const CELL = SITE_CELL;
 const RING = 2;
 const PER = (2 * RING + 1) ** 2;
 /** Formations nearer than this use the fine mesh and get a collider. */
@@ -20,6 +19,8 @@ const NEAR = 320;
 
 interface Site {
   key: string;
+  i: number;
+  j: number;
   form: number;
   x: number;
   z: number;
@@ -27,7 +28,6 @@ interface Site {
   col: RAPIER.Collider | null;
 }
 
-const _gs: GroundSample = { h: 0, river: 0, blight: 0, biome: Biome.Meadow, core: 0, wild: 0, isleSd: 1e4, rock: 0, strata: 0, sand: 0, ero: 0 };
 const _v = new THREE.Vector3();
 
 /**
@@ -38,6 +38,8 @@ const _v = new THREE.Vector3();
  */
 export class Landmarks {
   readonly group = new THREE.Group();
+  /** Atlas Stations stand on the lattice cells the formations leave free. */
+  readonly stations = false;
   private meshes: THREE.InstancedMesh[][] = [];
   private sites = new Map<string, Site>();
   private lastX = 1e9;
@@ -71,25 +73,13 @@ export class Landmarks {
     }, 1);
   }
 
-  private hash(i: number, j: number, k: number) {
-    let h = Math.imul(i, 0x27d4eb2d) ^ Math.imul(j, 0x165667b1) ^ Math.imul(k, 0x9e3779b1) ^ this.seed;
-    h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
-    return ((h ^ (h >>> 13)) >>> 0) / 4294967296;
-  }
-
   /** The formation a lattice cell raises, or null. */
   private site(i: number, j: number): Site | null {
-    if (this.hash(i, j, 1) > 0.5) return null;
-    const x = (i + 0.2 + 0.6 * this.hash(i, j, 2)) * CELL;
-    const z = (j + 0.2 + 0.6 * this.hash(i, j, 3)) * CELL;
+    const st = latticeSite(this.terrain.shape, this.seed, i, j, false);
+    if (!st || st.kind !== 'formation') return null;
+    const { x, z, form } = st;
     const t = this.terrain;
-    if (Math.hypot(x, z) < t.radius * 2.6 || t.wildness(x, z) < 0.5 || t.riverAt(x, z) > 0.05) return null;
-    t.shape.sample(x, z, _gs);
-    const pick = this.hash(i, j, 4) < 0.5 ? 0 : 1;
-    // the land chooses the fractal: canyonlands raise Menger ruins, ranges Julia towers, open ground Mandelbulbs
-    const kind = _gs.strata > 0.35 ? 2 : _gs.rock > 0.35 ? 4 : _gs.sand > 0.35 ? 0 : [0, 2, 4][Math.floor(this.hash(i, j, 5) * 3)];
-    const form = kind + pick;
-    const H = 22 + 28 * this.hash(i, j, 6);
+    const H = 22 + 28 * st.r1;
     const proto = FORMATIONS[form];
     // sink it to the lowest ground under its footprint so it never floats on a slope
     const r = H * (proto.kind === 'menger' ? 0.6 : 0.45);
@@ -98,10 +88,10 @@ export class Landmarks {
     y -= H * (proto.kind === 'menger' ? 0.12 : 0.08);
     const m = new THREE.Matrix4().compose(
       _v.set(x, y, z),
-      new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.hash(i, j, 7) * Math.PI * 2),
+      new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), st.r2 * Math.PI * 2),
       new THREE.Vector3(H, H, H),
     );
-    return { key: `${i},${j}`, form, x, z, m, col: null };
+    return { key: `${i},${j}`, i, j, form, x, z, m, col: null };
   }
 
   update(x: number, z: number) {
@@ -163,6 +153,12 @@ export class Landmarks {
   /** Formations in view (debug / shots). */
   get placed() {
     return [...this.sites.values()].map((s) => ({ x: s.x, z: s.z, form: s.form }));
+  }
+
+  /** The formation within r metres of (x, z), if any. */
+  near(x: number, z: number, r: number) {
+    for (const s of this.sites.values()) if (Math.hypot(s.x - x, s.z - z) < r) return { i: s.i, j: s.j, form: s.form };
+    return null;
   }
 
   private disposed = false;

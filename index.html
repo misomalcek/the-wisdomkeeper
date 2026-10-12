@@ -78,6 +78,7 @@
 
       <div id="banner" class="hidden"><div class="act"></div><h2></h2></div>
       <div id="toast" class="hidden"></div>
+      <div id="place" class="hidden"><h3></h3><div class="sub"></div></div>
       <div id="vignette"></div>
       <div id="damage-flash"></div>
 
@@ -142,7 +143,7 @@
       <!-- Map -->
       <section id="map" class="overlay hidden">
         <div class="panel mapp">
-          <div class="panel-head"><h2 id="map-title">Map</h2><button class="x" data-close>✕</button></div>
+          <div class="panel-head"><h2 id="map-title">Map</h2><button id="map-atlas" class="x hidden" style="margin-left:auto;margin-right:8px">Atlas</button><button class="x" data-close>✕</button></div>
           <canvas id="map-canvas" width="720" height="720"></canvas>
           <div id="map-legend"></div>
         </div>

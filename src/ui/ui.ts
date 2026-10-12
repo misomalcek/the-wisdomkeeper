@@ -1,3 +1,4 @@
+import type { AtlasData } from '../world/atlas';
 import type { Affinity, Choice, ChoiceSet, Item, LibraryEntry, Remembrance, RunState, Skin, Slot } from '../types';
 import { AFFINITY_META, PERKS, type ComposedStory } from '../story/story';
 import { STRATA } from '../story/strata';
@@ -56,6 +57,8 @@ export interface MapData extends MarkerSet {
   player: { x: number; z: number; yaw: number };
   accent: string;
   objective: { x: number; z: number } | null;
+  /** The Atlas of the Wilds around the hero (null where there are no Wilds); built when first shown. */
+  atlas?: () => AtlasData | null;
 }
 
 export interface InvHandlers {
@@ -387,6 +390,19 @@ export class UI {
     b.classList.remove('hidden');
     window.setTimeout(() => b.classList.add('hidden'), 5300);
   }
+
+  /** A place name on arrival (a province, a formation, a station), with a line saying what it is. */
+  place(name: string, sub: string) {
+    const b = $('place');
+    b.classList.add('hidden');
+    void b.offsetWidth;
+    (b.querySelector('h3') as HTMLElement).textContent = name;
+    (b.querySelector('.sub') as HTMLElement).textContent = sub;
+    b.classList.remove('hidden');
+    window.clearTimeout(this.placeT);
+    this.placeT = window.setTimeout(() => b.classList.add('hidden'), 6100);
+  }
+  private placeT = 0;
 
   toast(msg: string) {
     const t = $('toast');
@@ -775,9 +791,105 @@ export class UI {
   }
 
   // ---- world map ------------------------------------------------------------------
+  /** The Atlas: the chart of the Wilds with every place named (no fast travel from here). */
+  private drawAtlas(a: AtlasData, d: MapData) {
+    const cv = $<HTMLCanvasElement>('map-canvas');
+    const ctx = cv.getContext('2d')!;
+    const S = cv.width;
+    const P = (x: number, z: number) => [((x - a.cx) / a.extent * 0.5 + 0.5) * S, ((z - a.cz) / a.extent * 0.5 + 0.5) * S] as const;
+    ctx.clearRect(0, 0, S, S);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(a.raster, 0, 0, S, S);
+    // a faint graticule every 500 m
+    ctx.strokeStyle = 'rgba(200,255,235,0.08)';
+    ctx.lineWidth = 1;
+    for (let g = Math.ceil((a.cx - a.extent) / 500) * 500; g < a.cx + a.extent; g += 500) {
+      const [gx] = P(g, 0);
+      ctx.beginPath();
+      ctx.moveTo(gx, 0);
+      ctx.lineTo(gx, S);
+      ctx.stroke();
+    }
+    for (let g = Math.ceil((a.cz - a.extent) / 500) * 500; g < a.cz + a.extent; g += 500) {
+      const [, gy] = P(0, g);
+      ctx.beginPath();
+      ctx.moveTo(0, gy);
+      ctx.lineTo(S, gy);
+      ctx.stroke();
+    }
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const ink = (text: string, x: number, y: number, font: string, fill: string) => {
+      ctx.font = font;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(2,10,10,0.85)';
+      ctx.strokeText(text, x, y);
+      ctx.fillStyle = fill;
+      ctx.fillText(text, x, y);
+    };
+    for (const l of a.labels) {
+      if (l.kind !== 'province') continue;
+      const [x, y] = P(l.x, l.z);
+      ink(l.name.toUpperCase(), x, y, '300 15px ui-monospace, monospace', 'rgba(235,255,248,0.78)');
+    }
+    // every site gets its glyph; only the dozen nearest the hero are named, so the chart stays legible
+    const named = new Set(
+      a.labels
+        .filter((l) => l.kind !== 'province')
+        .sort((p, q) => Math.hypot(p.x - d.player.x, p.z - d.player.z) - Math.hypot(q.x - d.player.x, q.z - d.player.z))
+        .slice(0, 12),
+    );
+    for (const l of a.labels) {
+      if (l.kind === 'province') continue;
+      const [x, y] = P(l.x, l.z);
+      ctx.fillStyle = l.kind === 'station' ? '#7fe8ff' : '#ffd36b';
+      ctx.strokeStyle = '#02100f';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      if (l.kind === 'station') ctx.arc(x, y, 5, 0, Math.PI * 2);
+      else for (let k = 0; k < 10; k++) ctx.lineTo(x + Math.cos((k / 10) * Math.PI * 2 - Math.PI / 2) * (k % 2 ? 3 : 7), y + Math.sin((k / 10) * Math.PI * 2 - Math.PI / 2) * (k % 2 ? 3 : 7));
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      if (named.has(l)) ink(l.name, x, y + 15, '11px ui-monospace, monospace', l.kind === 'station' ? '#bff4ff' : '#ffe6a8');
+    }
+    const [px, py] = P(d.player.x, d.player.z);
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(-d.player.yaw + Math.PI);
+    ctx.fillStyle = d.accent;
+    ctx.strokeStyle = '#02100f';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, -11);
+    ctx.lineTo(8, 9);
+    ctx.lineTo(0, 5);
+    ctx.lineTo(-8, 9);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+    cv.onclick = null;
+    $('map-legend').innerHTML = '✦ Fractal formation &nbsp; ● Atlas Station &nbsp; ━ Physarum veins &nbsp; ➤ You &nbsp;·&nbsp; 4.2 km across';
+  }
+
+
   openMap(title: string, d: MapData, onClick: (x: number, z: number) => void) {
     $('map-title').textContent = title;
     this.mapClick = onClick;
+    const btn = $('map-atlas');
+    btn.classList.toggle('hidden', !d.atlas);
+    btn.textContent = 'Atlas';
+    let atlas: AtlasData | null = null;
+    btn.onclick = () => {
+      if (btn.textContent === 'Atlas') {
+        atlas ??= d.atlas?.() ?? null;
+        if (!atlas) return;
+        btn.textContent = 'Region';
+        $('map-title').textContent = 'Atlas of the Wilds';
+        this.drawAtlas(atlas, d);
+      } else this.openMap(title, d, onClick);
+    };
     const cv = $<HTMLCanvasElement>('map-canvas');
     const ctx = cv.getContext('2d')!;
     const S = cv.width;

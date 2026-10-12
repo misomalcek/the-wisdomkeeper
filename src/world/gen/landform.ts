@@ -141,6 +141,33 @@ export class Landforms {
     return w;
   }
 
+  /** The province a point belongs to (nearest warped centre): lattice index, archetype and centre (world m). */
+  province(x: number, z: number) {
+    const wx = x + this.nW(x * 0.0007, z * 0.0007) * 380;
+    const wz = z + this.nW(x * 0.0007 + 17.3, z * 0.0007 - 9.1) * 380;
+    const ox = wx + PROVINCE / 2;
+    const oz = wz + PROVINCE / 2;
+    const cx = Math.floor(ox / PROVINCE);
+    const cz = Math.floor(oz / PROVINCE);
+    let best = { i: 0, j: 0, form: Form.Basin, x: 0, z: 0 };
+    let bd = Infinity;
+    for (let j = -1; j <= 1; j++) {
+      for (let i = -1; i <= 1; i++) {
+        const gi = cx + i;
+        const gj = cz + j;
+        const centre = gi === 0 && gj === 0;
+        const px = (gi + (centre ? 0.5 : 0.2 + 0.6 * hash2(gi, gj, this.seed))) * PROVINCE;
+        const pz = (gj + (centre ? 0.5 : 0.2 + 0.6 * hash2(gi, gj, this.seed ^ 0x77))) * PROVINCE;
+        const d = Math.hypot(px - ox, pz - oz);
+        if (d < bd) {
+          bd = d;
+          best = { i: gi, j: gj, form: this.formOf(gi, gj), x: px - PROVINCE / 2, z: pz - PROVINCE / 2 };
+        }
+      }
+    }
+    return best;
+  }
+
   /** How strongly the provinces shape the land here: none near the authored core, full a few hundred metres out. */
   amplitude(x: number, z: number) {
     const r = Math.hypot(x, z);
