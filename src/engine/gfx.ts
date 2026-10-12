@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RenderPipeline, WebGPURenderer, PMREMGenerator } from 'three/webgpu';
-import { pass, mrt, output, normalView, uniform, vec3, vec4, mix, float, screenUV, smoothstep, length, vec2, renderOutput, dot, step, getViewPosition, exp, max } from 'three/tsl';
-import { bloomEmissive, fbm2, fogDensity, hash21, worldTime, type N } from './materials';
+import { pass, mrt, output, normalView, uniform, vec3, vec4, mix, float, screenUV, smoothstep, length, vec2, renderOutput, dot, step, getViewPosition, exp, max, fog as tslFog } from 'three/tsl';
+import { bloomEmissive, fbm2, fogBase, fogDensity, fogKeep, hash21, worldTime, type N } from './materials';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { fxaa } from 'three/addons/tsl/display/FXAANode.js';
@@ -22,7 +22,7 @@ const QUALITY: Record<Quality, { ratio: number; ao: boolean; shadows: boolean; s
 export class Gfx {
   readonly renderer: WebGPURenderer;
   readonly scene = new THREE.Scene();
-  readonly camera = new THREE.PerspectiveCamera(62, 1, 0.1, 1400);
+  readonly camera = new THREE.PerspectiveCamera(62, 1, 0.15, 6000);
   readonly hemi = new THREE.HemisphereLight(0x88ccff, 0x112211, 0.9);
   readonly sun = new THREE.DirectionalLight(0xffffff, 1.2);
   readonly playerLight = new THREE.PointLight(0x5cffc1, 10, 16, 1.7);
@@ -40,6 +40,7 @@ export class Gfx {
   readonly saturation = uniform(0.95);
   /** Ground mist: drifting low fog pooled in the hollows (world height base, density, colour). */
   readonly mistBase = uniform(0);
+  private readonly fogColor = uniform(new THREE.Color());
   readonly mistStrength = uniform(0.32);
   readonly mistColor = uniform(new THREE.Color(0.18, 0.42, 0.48));
   private projInv = uniform(new THREE.Matrix4());
@@ -142,7 +143,8 @@ export class Gfx {
       const drift: N = fbm2(wp.xz.mul(0.035).add(vec2(worldTime.mul(0.02), worldTime.mul(-0.013))));
       const height: N = exp(max(wp.y.sub(this.mistBase), 0).mul(-0.45));
       const along: N = float(1).sub(exp(dist.mul(-0.012)));
-      const mist: N = along.mul(height).mul(drift.mul(0.9).add(0.35)).mul(this.mistStrength).mul(step(d, 0.99999)).min(0.85);
+      const far: N = float(1).sub(smoothstep(220, 1400, dist).mul(0.65)); // the far land keeps its silhouettes
+      const mist: N = along.mul(height).mul(far).mul(drift.mul(0.9).add(0.35)).mul(this.mistStrength).mul(step(d, 0.99999)).min(0.85);
       lit = vec4(mix(lit.rgb, this.mistColor, mist), lit.a);
     }
     if (Q.ao && this.shafts) {
@@ -255,6 +257,7 @@ export class Gfx {
   followShadow(x: number, y: number, z: number) {
     // the mist pools a little below the hero; ease it so jumps and flight don't pump the fog
     this.mistBase.value += (y - 1.2 - this.mistBase.value) * 0.02;
+    fogBase.value = this.mistBase.value;
     const dir = this.sunDir;
     this.sun.target.position.set(x, y, z);
     this.sun.position.set(x + dir.x * 120, y + dir.y * 120, z + dir.z * 120);
@@ -267,12 +270,10 @@ export class Gfx {
     // mist takes the region's fog hue, lifted, so it reads as lit vapour rather than a grey wash
     this.mistColor.value.copy(fog).lerp(new THREE.Color(p.accent), 0.12).multiplyScalar(1.6);
     this.scene.background = fog;
-    if (this.scene.fog instanceof THREE.FogExp2) {
-      this.scene.fog.color.copy(fog);
-      this.scene.fog.density = p.fogDensity;
-    } else {
-      this.scene.fog = new THREE.FogExp2(fog, p.fogDensity);
-    }
+    // height fog (materials.fogKeep) instead of FogExp2: hazy valleys, readable ridgelines on the horizon
+    this.fogColor.value.copy(fog);
+    this.scene.fog = null;
+    this.scene.fogNode ??= tslFog(this.fogColor, float(1).sub(fogKeep));
     fogDensity.value = p.fogDensity;
     this.hemi.color.set(p.hemiSky);
     this.hemi.groundColor.set(p.hemiGround);

@@ -76,6 +76,11 @@ export class Physics {
   /** Interpolation factor between the last two fixed steps. */
   alpha = 0;
   private colliderTags = new Map<number, unknown>();
+  /**
+   * Optional source of ready-made heights (the terrain streamer's worker-built grids). When set, chunks beyond the
+   * hero's own ring wait for it instead of sampling the field on the main thread.
+   */
+  heightSource: ((i: number, j: number, size: number, res: number) => Float32Array | null) | null = null;
 
   constructor(heightAt: HeightFn, gravity = G) {
     this.heightAt = heightAt;
@@ -101,7 +106,10 @@ export class Physics {
           if (Math.max(Math.abs(i - ci), Math.abs(j - cj)) !== r) continue;
           const k = this.chunkKey(i, j);
           if (this.chunks.has(k)) continue;
-          this.chunks.set(k, this.buildChunk(i, j));
+          const ready = this.heightSource?.(i, j, CHUNK, CHUNK_RES) ?? null;
+          // far chunks can wait a few frames for the streamer's grid; the hero's own ring never waits
+          if (!ready && this.heightSource && r >= 2 && budget < 999) continue;
+          this.chunks.set(k, this.buildChunk(i, j, ready));
           built++;
         }
       }
@@ -132,16 +140,19 @@ export class Physics {
     return this.chunks.size;
   }
 
-  private buildChunk(i: number, j: number) {
+  private buildChunk(i: number, j: number, ready: Float32Array | null = null) {
     const n = CHUNK_RES;
-    const heights = new Float32Array((n + 1) * (n + 1));
     const x0 = i * CHUNK;
     const z0 = j * CHUNK;
     const step = CHUNK / n;
-    // Rapier stores heights column-major: rows run along z, columns along x.
-    for (let col = 0; col <= n; col++) {
-      for (let row = 0; row <= n; row++) {
-        heights[row + col * (n + 1)] = this.heightAt(x0 + col * step, z0 + row * step);
+    let heights = ready;
+    if (!heights) {
+      heights = new Float32Array((n + 1) * (n + 1));
+      // Rapier stores heights column-major: rows run along z, columns along x.
+      for (let col = 0; col <= n; col++) {
+        for (let row = 0; row <= n; row++) {
+          heights[row + col * (n + 1)] = this.heightAt(x0 + col * step, z0 + row * step);
+        }
       }
     }
     const desc = RAPIER.ColliderDesc.heightfield(n, n, heights, { x: CHUNK, y: 1, z: CHUNK })

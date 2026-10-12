@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { generateSurfaces, type SurfaceData } from './proctexGen';
+import { generateSurfaces, juliaGlyph, type SurfaceData } from './proctexGen';
 
 /**
  * Procedural surface textures, generated on the CPU when a world is built and sampled by the world materials
@@ -13,6 +13,7 @@ import { generateSurfaces, type SurfaceData } from './proctexGen';
  *  - stone:  R mortar joints, G block tone + chipping, B fissures, A lichen
  *  - bark:   R fibres, G plate furrows, B fbm, A moss
  *  - fractal (baked): R Mandelbrot boundary, G Julia set, B Sierpinski carpet, A Mandelbrot interior
+ *  - glyph: R the region's own Julia boundary (World Genome constant c), G its interior
  */
 
 /** 0 = low (no bump, fewest samples), 1 = medium, 2 = high and up. Read when world materials are built. */
@@ -45,11 +46,16 @@ export const surfaces = {
   ground: makeTex(SIZE, [0, 0, 128, 0]),
   stone: makeTex(SIZE, [0, 128, 0, 0]),
   bark: makeTex(SIZE, [128, 0, 128, 0]),
+  glyph: makeTex(256, [0, 0, 0, 0]),
 };
-let wanted: number | null = null;
+let wanted: string | null = null;
 let worker: Worker | null = null;
 
-function apply(d: SurfaceData) {
+function apply(d: SurfaceData & { glyph?: Uint8Array | null }) {
+  if (d.glyph) {
+    (surfaces.glyph.image.data as Uint8Array).set(d.glyph);
+    surfaces.glyph.needsUpdate = true;
+  }
   for (const k of ['ground', 'stone', 'bark'] as const) {
     const t = surfaces[k];
     if (t.image.width !== d.size) {
@@ -64,24 +70,25 @@ function apply(d: SurfaceData) {
  * Regenerate the surface textures for a world seed: in a worker when the browser has one (a few hundred ms of
  * noise stays off the frame), else right here. No-op when already built or building for this seed.
  */
-export function buildSurfaces(seed: number) {
-  if (wanted === seed) return;
-  wanted = seed;
+export function buildSurfaces(seed: number, julia: [number, number] | null = null) {
+  const key = `${seed}:${julia}`;
+  if (wanted === key) return;
+  wanted = key;
   const size = surfaceDetail === 0 ? 256 : SIZE;
   if (typeof document === 'undefined') return; // headless world builds (tests, tools) never draw them
   if (typeof Worker !== 'undefined') {
     try {
       worker ??= new Worker(new URL('./proctex.worker.ts', import.meta.url), { type: 'module' });
-      worker.onmessage = (e: MessageEvent<SurfaceData & { seed: number }>) => {
-        if (e.data.seed === wanted) apply(e.data);
+      worker.onmessage = (e: MessageEvent<SurfaceData & { key: string; glyph: Uint8Array | null }>) => {
+        if (e.data.key === wanted) apply(e.data);
       };
-      worker.postMessage({ seed, size });
+      worker.postMessage({ key, seed, size, julia });
       return;
     } catch {
       worker = null;
     }
   }
-  apply(generateSurfaces(seed, size));
+  apply({ ...generateSurfaces(seed, size), glyph: julia ? juliaGlyph(julia[0], julia[1], 256) : null });
 }
 
 const loader = new THREE.TextureLoader();

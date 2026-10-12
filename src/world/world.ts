@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { worldTime } from '../engine/materials';
+import { worldTime, fogFar } from '../engine/materials';
 import type { RunState } from '../types';
 import { STRATA, type Palette, type StratumDef } from '../story/strata';
 import { Rng, hashString } from '../util/rng';
@@ -17,8 +17,18 @@ import { DriftField, MushroomGroves, type TetherAnchor } from './traversal';
 import { Props } from './props';
 import { TerrainStreamer } from './chunks';
 import { Wilds } from './wilds';
+import { Landmarks } from './landmarks';
+import { Network } from './network';
+import { Toponymy, title } from './gen/names';
+import { FORMATIONS } from './gen/meshgen/fractals';
+import { STATIONS } from './gen/meshgen/stations';
 import { VeilSetPiece, layoutVeil, type VeilLayout } from './veil';
 import { buildSurfaces } from '../engine/proctex';
+import { perf } from '../engine/perf';
+import { flag } from '../engine/flags';
+import { juliaConstant, lineageDrifts, neutralGenome, regionGenome, type Drift, type Genome } from './genome';
+import { biomeStyle, nullColour } from './biomeStyle';
+import { LivingField } from '../bio/livingField';
 
 /** How much traversal furniture each region gets. */
 const TRAVERSAL: Record<string, { mush: number; drift: number; crystals: number; pods: number }> = {
@@ -58,11 +68,24 @@ export class World {
   readonly def: StratumDef;
   readonly radius: number;
   readonly palette: Palette;
+  readonly genome: Genome;
+  /** Why this region's genome differs from its birth genome (narrated on entry). */
+  readonly drifts: Drift[];
+  /** Null corruption fronts and purification waves around the hero (null when the look flag is off). */
+  readonly living: LivingField | null = null;
   readonly terrain: Terrain;
   /** Chunk-streamed ground (one batched draw call). */
   readonly ground: TerrainStreamer;
   /** Procedural flora and mycelium of the infinite Wilds (null in bounded boss arenas). */
   readonly wilds: Wilds | null;
+  /** Fractal landmark formations of the Wilds (null without landforms or outside the Wilds). */
+  readonly landmarks: Landmarks | null;
+  /** Physarum veins linking the sites (null without the network look flag or outside the Wilds). */
+  readonly network: Network | null = null;
+  /** Place names of the Wilds, in the region's own language. */
+  readonly names: Toponymy;
+  /** Seed of the Wilds' site lattice (formations and stations; shared with the network worker). */
+  readonly siteSeed: number;
   readonly flora: Flora;
   readonly mycelium: Mycelium;
   readonly grove: EchoGrove;
@@ -94,10 +117,15 @@ export class World {
     this.radius = def.radius * params.arenaScale;
     this.palette = shiftPalette(def.palette, def.id === 'return' ? 0 : params.hueShift);
     const baseSeed = hashString(`${run.seed}:${def.id === 'return' ? 'seedbed' : def.id}`);
-    // each region grows its own ground, stone and bark textures
-    buildSurfaces(baseSeed);
     this.rng = new Rng(baseSeed ^ 0x51ed);
+    // the World Genome: this seed and region, evolved by every choice already recorded on the run
+    this.genome = flag('genome') ? regionGenome(run.seed, def.id, run) : neutralGenome();
+    this.drifts = flag('genome') ? lineageDrifts(run) : [];
+    // each region grows its own ground, stone and bark textures, and writes its own Julia sigils
+    buildSurfaces(baseSeed, flag('glyphs') ? juliaConstant(this.genome) : null);
     const rng = this.rng;
+    this.names = new Toponymy(baseSeed ^ 0x7a3e);
+    this.siteSeed = baseSeed ^ 0x1a9d;
 
     this.terrain = new Terrain({
       radius: this.radius,
@@ -110,12 +138,28 @@ export class World {
       // boss arenas stay a closed bowl; every other region opens into the infinite Wilds
       wild: !def.boss,
       flavour: def.flora,
+      genome: this.genome,
+      features: { erosion: flag('erosion'), terrace: flag('terrace'), orbit: flag('orbit'), landforms: flag('landforms') },
     });
-    this.ground = new TerrainStreamer(this.terrain);
+    if (flag('genome')) this.terrain.setNullColour(nullColour(this.genome));
+    this.ground = new TerrainStreamer(this.terrain, biomeStyle(this.genome, flag('oklab')));
+    const lt = this.terrain.living;
+    if (lt) {
+      this.living = new LivingField({ size: lt.size, cell: lt.cell, excite: this.genome.excite, mercy: this.genome.mercy }, (x, z) => this.terrain.blightAt(x, z));
+      this.living.sources = this.terrain.corruptions.map(() => ({ x: 0, z: 0, r: 1, s: 0 }));
+    }
     this.group.add(this.ground.mesh);
+    if (this.ground.horizon) this.group.add(this.ground.horizon);
+    fogFar.value = this.ground.horizon ? 1 : 0;
     this.physics = new Physics((x, z) => this.terrain.heightAt(x, z));
+    if (this.ground.threaded) this.physics.heightSource = (i, j, size, res) => this.ground.physicsHeights(i, j, size, res);
     this.wilds = this.terrain.wild ? new Wilds(this.terrain, this.physics, this.palette, baseSeed ^ 0x77, this.tetherAnchors) : null;
-    if (this.wilds) this.group.add(this.wilds.group);
+    this.landmarks = this.terrain.wild && flag('landforms') ? new Landmarks(this.terrain, this.physics, this.palette, this.siteSeed) : null;
+    if (this.landmarks) this.group.add(this.landmarks.group);
+    if (this.wilds) {
+      this.group.add(this.wilds.group);
+      if (this.ground.threaded) this.wilds.surface = (x, z) => this.ground.surfaceAt(x, z);
+    }
     this.colliders.onAdd = (x, z, r) => this.physics.addPillar(x, z, r);
 
     // ---- layout -----------------------------------------------------------------------
@@ -294,6 +338,11 @@ export class World {
       this.group.add(c.group);
       this.colliders.add(p.x, p.y, 1.0);
     });
+    if (this.terrain.network) {
+      // the slime mould feeds on the region's pylons, nodes and gate as well as on the Wilds' sites
+      const pois = [...pylonXZ.map((p) => ({ x: p.x, z: p.y, w: 1 })), ...nodeXZ.map((p) => ({ x: p.x, z: p.y, w: 0.8 })), { x: gateXZ.x, z: gateXZ.y, w: 1 }];
+      (this as { network: Network | null }).network = new Network(this.terrain, { siteSeed: this.siteSeed, stations: !!this.landmarks?.stations, pois, x: startXZ.x, z: startXZ.y });
+    }
 
     if (veilLayout) {
       const cols: { x: number; z: number; y: number }[] = [];
@@ -330,6 +379,8 @@ export class World {
     this.group.add(this.sky.mesh);
     this.spires = new Spires(R, this.palette, def.id === 'mirror' ? 36 : 54);
     this.group.add(this.spires.mesh);
+    // with the far land drawn, real ranges make the skyline; the stand-in spires go
+    this.spires.mesh.visible = !this.ground.horizon;
     this.motes = new Motes(R, def.id === 'mirror' ? 260 : 460, this.palette, def.id !== 'mirror');
     this.group.add(this.motes.object);
   }
@@ -385,21 +436,95 @@ export class World {
 
   /** Stream ground, Wilds and physics around the hero. */
   stream(x: number, z: number) {
+    perf.start('ground');
     this.ground.update(x, z, 2);
+    perf.stop('ground');
+    perf.start('wilds');
     this.wilds?.update(x, z, 1);
+    this.landmarks?.update(x, z);
+    this.network?.update(x, z);
+    perf.stop('wilds');
+    perf.start('physics');
     this.physics.streamTerrain(x, z);
+    perf.stop('physics');
+    if (flag('coast')) this.terrain.setCoastIsle(this.terrain.wild?.isles?.nearestBaked(x, z) ?? null);
+  }
+
+  /**
+   * The named place at (x, z) in the Wilds: a formation within 70 m, else the landform province; null in the
+   * authored heart of the region (it has its own name). `key` changes when the place does.
+   */
+  placeAt(x: number, z: number): { key: string; name: string; sub: string } | null {
+    const forms = this.terrain.wild?.forms;
+    if (!forms || this.terrain.wildness(x, z) < 0.6) return null;
+    const f = this.landmarks?.near(x, z, 70);
+    if (f?.kind === 'station') {
+      const s = STATIONS[f.form];
+      const sub =
+        s.kind === 'dome'
+          ? `${s.freq}V geodesic dome · ${s.material} members sized by stiffness analysis`
+          : `${s.material} gridshell · a hanging net, inverted · ${s.openings} arches`;
+      return { key: `s${f.i},${f.j}`, name: title(this.names.station(f.i, f.j)), sub };
+    }
+    if (f) {
+      const s = FORMATIONS[f.form];
+      const sub =
+        s.kind === 'menger' ? `Menger sponge · kaleidoscopic IFS${s.p ? `, twisted ${s.p} rad` : ''} · ${s.iter} folds` : s.kind === 'bulb' ? `Mandelbulb · z ↦ z^${s.p} + c · orbit-trap veins` : `Julia bulb · z ↦ z^${s.p} + k · a fixed k`;
+      return { key: `f${f.i},${f.j}`, name: title(this.names.formation(f.i, f.j, s.kind)), sub };
+    }
+    const p = forms.province(x, z);
+    const n = this.names.province(p.i, p.j, p.form);
+    return { key: `p${p.i},${p.j}`, name: title(n.name), sub: n.kind };
+  }
+
+  /** A purification event (kill, purge, Surge): a ring of living light runs out from (x, z) over the ground. */
+  purify(x: number, z: number, radius: number) {
+    this.living?.pulse(x, z, radius);
+    // the network grows toward purified ground for a while
+    if (radius >= 6) this.network?.feed(x, z, Math.min(1.2, radius / 14), 40);
+  }
+
+  /** Corruption and purification glow under a point (both 0 when the living field is off). */
+  livingAt(x: number, z: number) {
+    return this.living ? this.living.at(x, z, this.lv) : ((this.lv.c = this.lv.u = 0), this.lv);
+  }
+  private lv = { c: 0, u: 0 };
+
+  private updateLiving(dt: number, player: THREE.Vector3) {
+    const L = this.living;
+    const lt = this.terrain.living;
+    if (!L || !lt) return;
+    perf.start('living');
+    L.follow(player.x, player.z);
+    const cs = this.terrain.corruptions;
+    for (let i = 0; i < cs.length; i++) {
+      const s = L.sources[i];
+      s.x = cs[i].x;
+      s.z = cs[i].y;
+      s.r = cs[i].z;
+      s.s = cs[i].w;
+    }
+    if (L.update(dt, 1) > 0) {
+      L.write(lt.data);
+      const [cx, cz] = L.centre;
+      this.terrain.setLiving(cx, cz);
+    }
+    perf.stop('living');
   }
 
   /** Build everything around (x, z) at once (region entry, respawn, fast travel). */
   prime(x: number, z: number) {
     this.ground.prime(x, z);
+    this.living?.follow(x, z);
     this.wilds?.prime(x, z);
+    this.landmarks?.update(x, z);
     this.physics.prime(x, z);
   }
 
   update(dt: number, t: number, camPos: THREE.Vector3, _pointScale: number, player: THREE.Vector3) {
     worldTime.value = t;
     this.terrain.update(t);
+    this.updateLiving(dt, player);
     this.flora.update(t);
     this.mycelium.update(dt, t);
     this.grove.update(dt);
@@ -476,6 +601,8 @@ export class World {
 
   dispose() {
     this.wilds?.dispose();
+    this.landmarks?.dispose();
+    this.network?.dispose();
     this.ground.dispose();
     this.terrain.dispose();
     this.flora.dispose();

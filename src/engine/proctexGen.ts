@@ -162,3 +162,42 @@ export function generateSurfaces(seed: number, size: number): SurfaceData {
   fill(out.bark, size, barkGen(r));
   return out;
 }
+
+/**
+ * The region's own Julia glyph (R: boundary line from the distance estimate, G: soft interior), for the genome's
+ * constant c. Written into the soil in light, so every seed draws different sigils. z spans [−1.6, 1.6]².
+ */
+export function juliaGlyph(cx: number, cy: number, size: number): Uint8Array {
+  const out = new Uint8Array(size * size * 4);
+  const span = 1.6;
+  const px = (2 * span) / size;
+  for (let j = 0; j < size; j++) {
+    for (let i = 0; i < size; i++) {
+      let x = -span + (i + 0.5) * px;
+      let y = -span + (j + 0.5) * px;
+      let dx = 1;
+      let dy = 0;
+      let m2 = x * x + y * y;
+      let k = 0;
+      for (; k < 64 && m2 < 1e6; k++) {
+        const ndx = 2 * (x * dx - y * dy);
+        dy = 2 * (x * dy + y * dx);
+        dx = ndx;
+        const nx = x * x - y * y + cx;
+        y = 2 * x * y + cy;
+        x = nx;
+        m2 = x * x + y * y;
+      }
+      const o = (j * size + i) * 4;
+      if (m2 >= 1e6) {
+        const m = Math.sqrt(m2);
+        const de = (0.5 * m * Math.log(m)) / Math.hypot(dx, dy) / px; // in texels
+        out[o] = Math.round(255 * Math.exp(-de * 0.9));
+      } else {
+        out[o] = 255;
+        out[o + 1] = 160;
+      }
+    }
+  }
+  return out;
+}

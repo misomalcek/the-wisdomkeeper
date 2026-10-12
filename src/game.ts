@@ -6,6 +6,7 @@ import { ThirdPersonCam } from './engine/camera';
 import { Input } from './engine/input';
 import { AudioEngine } from './engine/audio';
 import { Particles } from './engine/particles';
+import { buildAtlas } from './world/atlas';
 import { UI, type HudState, type MapData, type MarkerSet } from './ui/ui';
 import { setupTouch } from './ui/touch';
 import { World, type CampSpec } from './world/world';
@@ -39,6 +40,9 @@ import { LAYER } from './physics/physics';
 import { StoryDeck, addPunch, buildStorycard, lastPunchOf, mergeLibrary, runFromCard, type Storycard } from './systems/storycards';
 import { StorycardsPanel } from './ui/storycardsPanel';
 import { setSurfaceDetail } from './engine/proctex';
+import { strongestDrift } from './world/genome';
+import { perf } from './engine/perf';
+import { flagState } from './engine/flags';
 
 type Mode = 'title' | 'prologue' | 'play' | 'choice' | 'transition' | 'dead' | 'ending';
 
@@ -499,6 +503,7 @@ export class Game {
     this.gfx.grace = 3.5;
     setSurfaceDetail(this.gfx.quality);
     this.world = new World(def, this.run);
+    this.placeSeen.clear();
     this.gfx.scene.add(this.world.group);
     this.world.prime(this.world.startPos.x, this.world.startPos.z);
     this.cam.terrainH = (x, z) => this.world.terrain.heightAt(x, z);
@@ -594,7 +599,12 @@ export class Game {
       this.boss = this.enemies.find((e) => e.kind === 'boss') ?? null;
     }
 
-    if (lastPunchOf(this.run, 'stratum')?.stratum !== index) this.punch('stratum', `Entered ${this.def.name} — ${this.def.act}`);
+    // the World Genome: the strongest way this run's choices reshaped the region is told once and punched on the card
+    const drift = this.def.boss ? null : strongestDrift(this.world.drifts);
+    if (lastPunchOf(this.run, 'stratum')?.stratum !== index) {
+      this.punch('stratum', `Entered ${this.def.name} — ${this.def.act}`);
+      if (drift) this.punch('land', `${this.def.name} grew from ${drift.why}`);
+    }
     this.mode = 'play';
     this.ui.hideAll();
     this.ui.setHudVisible(true);
@@ -604,6 +614,7 @@ export class Game {
       if (this.run.stratumIndex !== index) return;
       this.ui.say(this.def.intro);
       if (this.pendingNote && index > 0 && !this.def.boss && this.def.id !== 'return') this.ui.say(`The Mycelial Mind noticed — ${this.pendingNote}`);
+      else if (drift) this.ui.say(`The land remembers — ${drift.why}.`);
       this.pendingNote = '';
     }, 1800);
     this.saveRun();
@@ -708,6 +719,7 @@ export class Game {
     const raw = (ms - this.last) / 1000;
     this.last = ms;
     if (raw <= 0 || raw > 5) return;
+    perf.begin();
     const dt = Math.min(raw, 0.05);
     this.gfx.adapt(raw);
     this.handleGlobalKeys();
@@ -724,8 +736,14 @@ export class Game {
     this.gfx.camera.updateMatrixWorld();
     this.gfx.followShadow(this.player.x, this.player.y, this.player.z);
     updateOcclusion(this.gfx.renderer, this.gfx.camera, this.tmp.set(this.player.x, this.player.y + 1, this.player.z));
-    this.gfx.render();
+    if (this.debugView) {
+      const v = this.debugView;
+      this.gfx.camera.position.set(v[0], v[1], v[2]);
+      this.gfx.camera.lookAt(v[3], v[4], v[5]);
+    }
+    if (!this.debugNoRender) this.gfx.render();
     this.input.endFrame();
+    perf.end();
   };
 
   private handleGlobalKeys() {
@@ -854,20 +872,54 @@ export class Game {
     }
     this.time += dt;
     this.world.update(dt, this.time, this.gfx.camera.position, this.gfx.pointScale, this.player.group.position);
+    // riding a purification wave restores a trickle of Resonance (the living field's small gameplay echo)
+    const lv = this.world.livingAt(this.player.x, this.player.z);
+    if (lv.u > 0.5) this.player.res = Math.min(this.derived.maxRes, this.player.res + dt * 3);
     this.particles.update(dt);
     this.fadeCamps(dt);
+    this.announcePlace();
   }
+
+  /** Name the province, formation or station the hero has just reached (checked twice a second). */
+  private announcePlace() {
+    const now = performance.now();
+    if (now < this.placeT || this.mode !== 'play') return;
+    this.placeT = now + 500;
+    const p = this.world.placeAt(this.player.x, this.player.z);
+    // provinces and formations are remembered apart, so stepping away from a formation doesn't re-announce the land
+    if (!p || this.placeSeen.has(p.key)) return;
+    if (p.key.startsWith('p')) this.placeSeen.forEach((k) => k.startsWith('p') && this.placeSeen.delete(k));
+    this.placeSeen.add(p.key);
+    if (this.placeSeen.size > 64) this.placeSeen.clear();
+    this.ui.place(p.name, p.sub);
+  }
+  private placeT = 0;
+  private placeSeen = new Set<string>();
 
   flowAt(x: number, z: number) {
     const f = this.world.terrain.flowAt(x, z, this.flow);
-    if (f.x === 0 && f.y === 0 && this.world.mycelium.cordAt(x, z, this.cordTmp) > 0) f.set(this.cordTmp.x * 6, this.cordTmp.y * 6);
+    if (f.x === 0 && f.y === 0 && this.cordAt(x, z) > 0) f.set(this.cordTmp.x * 6, this.cordTmp.y * 6);
     return f;
   }
 
-  /** Strength (0..1) of a conducted mycelial cord under (x, z): the hero levitates along it for free. */
+  /**
+   * Strength (0..1) of a conducted flow line under (x, z), a mycelial cord or the core of a Physarum vein: the hero
+   * levitates along it for free. `cordTmp` receives its direction × strength.
+   */
   cordAt(x: number, z: number) {
-    return this.world.mycelium.cordAt(x, z, this.cordTmp);
+    const c = this.world.mycelium.cordAt(x, z, this.cordTmp);
+    const net = this.world.network;
+    if (!net) return c;
+    const v = net.at(x, z, this.netTmp);
+    // only the bright core of a vein conducts
+    const n = Math.max(0, Math.min(1, (v - 0.82) / 0.14));
+    if (n <= c) return c;
+    const k = v > 0 ? n / v : 0;
+    this.cordTmp.x = this.netTmp.x * k;
+    this.cordTmp.y = this.netTmp.y * k;
+    return n;
   }
+  private netTmp = { x: 0, y: 0 };
   private cordTmp = { x: 0, y: 0 };
 
   private buildIntent(dead: boolean): Intent {
@@ -1136,6 +1188,7 @@ export class Game {
     if (!c || c.cleared) return;
     if (c.enemies.every((o) => o.dead)) {
       c.cleared = true;
+      this.world.purify(c.spec.x, c.spec.z, 7);
       this.gainXp(c.spec.kind === 'node' ? 90 : 60);
       this.audio.sfx('ready');
       this.audio.sfx('plant');
@@ -1953,6 +2006,7 @@ export class Game {
     this.dropCrystals(py.pos.x, py.pos.z, 5);
     // the purge wave stuns every Fiend and Drone in range (blueprint: pylon purge stun)
     purgeStun(this, py.pos.x, py.pos.z, 30);
+    this.world.purify(py.pos.x, py.pos.z, 9);
     this.director.stimulate(py.pos.x, py.pos.z, this.world.radius, 2);
     p.hp = this.derived.maxHp;
     p.res = this.derived.maxRes;
@@ -2305,6 +2359,7 @@ export class Game {
       player: { x: p.x, z: p.z, yaw: this.cam.yaw },
       accent: '#' + new THREE.Color(w.palette.accent).getHexString(),
       objective: this.objectivePoint(),
+      atlas: w.terrain.wild?.forms ? () => buildAtlas(w, p.x, p.z) : undefined,
     };
     this.ui.openMap(this.def.name, data, (x, z) => this.mapClick(x, z));
   }
@@ -2429,6 +2484,17 @@ export class Game {
     this.player.place(x, this.world.terrain.heightAt(x, z), z);
     this.world.prime(x, z);
     this.cam.snap(this.player.cameraTarget);
+  }
+  /** Benchmarks: skip rendering so frame times measure the main thread alone (software GL would swamp them). */
+  debugNoRender = false;
+  /** QA shots: a fixed camera (eye xyz, target xyz) that overrides the follow camera. */
+  debugView: number[] | null = null;
+  /** Profiler and P1 feature-flag state for the benchmark scripts. */
+  get debugPerf() {
+    return perf;
+  }
+  debugFlags() {
+    return flagState();
   }
   debugClearCamps() {
     for (const c of this.camps) for (const e of c.enemies) if (!e.dead) this.combat.killEnemy(e);

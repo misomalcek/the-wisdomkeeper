@@ -141,6 +141,11 @@ input[type='range'] { accent-color: var(--accent); width: 60%; }
 @keyframes banner { 0% { opacity: 0; letter-spacing: 0.1em; } 15% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; letter-spacing: 0.5em; } }
 #toast { position: absolute; left: 50%; top: 22%; transform: translateX(-50%); z-index: 26; padding: 9px 18px; border-radius: 8px; border: 1px solid var(--line); background: rgba(4,18,17,0.85); font-size: 13px; letter-spacing: 0.12em; pointer-events: none; animation: toast 2.8s ease forwards; }
 @keyframes toast { 0% { opacity: 0; transform: translate(-50%, 10px); } 10%, 80% { opacity: 1; transform: translate(-50%, 0); } 100% { opacity: 0; } }
+#place { position: absolute; left: 0; right: 0; top: 14%; text-align: center; z-index: 24; pointer-events: none; animation: place 6s ease forwards; }
+#place h3 { margin: 0; font-weight: 300; font-size: clamp(18px, 3.2vw, 34px); letter-spacing: 0.24em; text-shadow: 0 0 30px rgba(92,255,193,0.45); }
+#place .sub { margin-top: 6px; font-size: 11px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--dim); }
+#place::after { content: ''; display: block; width: min(320px, 50vw); height: 1px; margin: 10px auto 0; background: linear-gradient(90deg, transparent, var(--line), transparent); }
+@keyframes place { 0% { opacity: 0; transform: translateY(6px); } 12%, 78% { opacity: 1; transform: none; } 100% { opacity: 0; } }
 #vignette { position: absolute; inset: 0; pointer-events: none; z-index: 5; background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.55) 100%); }
 #damage-flash { position: absolute; inset: 0; pointer-events: none; z-index: 6; background: radial-gradient(ellipse at center, transparent 35%, rgba(255,40,90,0.65)); opacity: 0; transition: opacity 0.35s; }
 #damage-flash.on { opacity: 1; transition: none; }
