@@ -243,6 +243,7 @@ export class Game {
   }
   saveRun() {
     this.run.fiber = Math.round(this.player.fiber);
+    this.hooks.emit('save', { run: this.run });
     store.set(SAVE_KEY, this.run);
     this.deck.push(buildStorycard(this.run));
   }
@@ -440,6 +441,7 @@ export class Game {
     this.punch('cycle', 'Cycle 1 began — a seed in the soil of code');
     store.del(SAVE_KEY);
     this.startPrologue([OPENING_QUOTE, SECOND_QUOTE]);
+    this.hooks.emit('story', { seed: this.run.seed });
   }
 
   private beginNextCycle() {
@@ -1231,6 +1233,11 @@ export class Game {
   campCleared(nodeIndex: number) {
     const c = this.camps.find((x) => x.spec.nodeIndex === nodeIndex);
     return !c || c.cleared;
+  }
+
+  /** Edition surface: the Storycards panel (an edition may route its downloads, e.g. to a native save dialog). */
+  get storycards(): StorycardsPanel {
+    return this.cards;
   }
 
   /** Edition surface (read-only): this stratum's camps. */

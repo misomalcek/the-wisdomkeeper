@@ -244,7 +244,7 @@ for (const aff of ['root', 'echo', 'flow']) {
   const { page, logs, close } = await fresh(1);
   await page.evaluate(() => {
     const g = window.__wk, seen = (window.__seen = {});
-    for (const e of ['stratum', 'tick', 'spawn', 'kill', 'hurt', 'death', 'respawn', 'echo', 'pylon', 'remembrance']) g.hooks.on(e, () => (seen[e] = (seen[e] ?? 0) + 1));
+    for (const e of ['stratum', 'tick', 'spawn', 'kill', 'hurt', 'death', 'respawn', 'echo', 'pylon', 'remembrance', 'save']) g.hooks.on(e, () => (seen[e] = (seen[e] ?? 0) + 1));
   });
   const r = await page.evaluate(() => {
     const g = window.__wk, p = g.player;
@@ -274,7 +274,7 @@ for (const aff of ['root', 'echo', 'flow']) {
   const after = await page.evaluate(() => window.__seen);
   check('hooks: tick, spawn, kill, echo, hurt and death fire', r.tick > 0 && r.spawn >= 1 && r.kill >= 1 && r.echo >= 1 && r.hurt >= 2 && r.death === 1, JSON.stringify(r));
   check('hooks: the travel gate bars a purged pylon', gate.toast === 'barred' && !gate.busy, `toast=${gate.toast}`);
-  check('hooks: respawn and stratum fire', after.respawn >= 1 && after.stratum >= 1, JSON.stringify(after));
+  check('hooks: respawn, stratum and save fire', after.respawn >= 1 && after.stratum >= 1 && after.save >= 1, JSON.stringify(after));
   check('hooks: no console errors', logs.length === 0, logs.join(' | '));
   await close();
 }

@@ -1,5 +1,5 @@
 import type { Enemy } from '../entities/enemies';
-import type { EnemyKind, Remembrance } from '../types';
+import type { EnemyKind, Remembrance, RunState } from '../types';
 import type { Pylon } from '../world/structures';
 
 /**
@@ -36,6 +36,10 @@ export interface GameEvents {
   pylon: { pylon: Pylon };
   /** An echo-tree took root. */
   echo: { x: number; z: number; source: 'dash' | 'kill' | 'node' | 'manual' };
+  /** The run is about to be saved (Continue slot and autosave deck): a listener may still add to it. */
+  save: { run: RunState };
+  /** The player began a new story from the title (a fresh run and seed). */
+  story: { seed: number };
 }
 
 export type GameEvent = keyof GameEvents;

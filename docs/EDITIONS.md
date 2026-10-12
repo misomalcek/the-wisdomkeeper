@@ -27,9 +27,9 @@ The fork never edits this repository's files. It attaches through these points, 
 
 1. **`src/main.ts`** loads `src/evo/install.ts` through `import.meta.glob` when the build runs with
    `VITE_EDITION=evolutions`. In this repository the glob is empty, so the web bundle carries nothing of it.
-2. **`Game.hooks`** (`src/systems/hooks.ts`) is an event bus for what happens in play: stratum, tick, spawn,
-   kill, hurt, death, respawn, remembrance, pylon and echo. It also holds `travelGate`, which lets an edition bar
-   fast travel to a place. `Game.campStates` and `Game.inTransition` give read-only views.
+2. **`Game.hooks`** (`src/systems/hooks.ts`) is an event bus for what happens in play: stratum, transition, tick, spawn,
+   kill, hurt, death, respawn, remembrance, pylon, echo, save and story. It also holds `travelGate`, which lets an edition bar
+   fast travel to a place. `Game.campStates`, `Game.inTransition` and `Game.storycards` give access without reaching into private fields.
 3. **`runExtensions.evolution`** in `src/systems/storycards.ts`, with `RunState.evolution`, lets an edition keep
    its own block on a storycard. Without a registered validator, the web build drops the block.
 
