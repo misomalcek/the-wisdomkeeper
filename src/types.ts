@@ -103,6 +103,8 @@ export interface RunState {
   missions?: Mission[];
   /** Storycard punches: the chronological log of story beats (optional for older saves). */
   punches?: Punch[];
+  /** An edition's own block, kept only where `runExtensions.evolution` validates it (the web build drops it). */
+  evolution?: unknown;
 }
 
 export type PunchKind =

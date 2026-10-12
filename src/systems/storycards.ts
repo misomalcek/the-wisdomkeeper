@@ -359,6 +359,12 @@ function vLibrary(v: unknown, path: string): LibraryEntry {
   };
 }
 
+/**
+ * Edition hook: a build that adds its own block to the run (the desktop edition's `evolution` chronicle) registers
+ * a validator here. Without one, an unknown block is dropped like any other unknown field.
+ */
+export const runExtensions: { evolution?: (v: unknown, path: string) => unknown } = {};
+
 /** Validates an untrusted RunState and rebuilds it from known fields only (older optional fields are filled in). */
 export function validateRun(v: unknown, path = 'run'): RunState {
   const o = obj(v, path);
@@ -413,6 +419,7 @@ export function validateRun(v: unknown, path = 'run'): RunState {
   if (fiber !== undefined) run.fiber = fiber;
   const punches = opt(o.punches, (x) => arr(x, `${path}.punches`, MAX_PUNCHES * 5).map((p, i) => vPunch(p, `${path}.punches[${i}]`)));
   if (punches) run.punches = punches.slice(-MAX_PUNCHES);
+  if (o.evolution !== undefined && runExtensions.evolution) run.evolution = runExtensions.evolution(o.evolution, `${path}.evolution`);
   return run;
 }
 

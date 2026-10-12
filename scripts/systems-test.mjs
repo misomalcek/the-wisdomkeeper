@@ -239,6 +239,46 @@ for (const aff of ['root', 'echo', 'flow']) {
   await close();
 }
 
+// ---- 8b. edition hooks: the events the desktop edition listens to keep firing, and its travel gate holds
+{
+  const { page, logs, close } = await fresh(1);
+  await page.evaluate(() => {
+    const g = window.__wk, seen = (window.__seen = {});
+    for (const e of ['stratum', 'tick', 'spawn', 'kill', 'hurt', 'death', 'respawn', 'echo', 'pylon', 'remembrance']) g.hooks.on(e, () => (seen[e] = (seen[e] ?? 0) + 1));
+  });
+  const r = await page.evaluate(() => {
+    const g = window.__wk, p = g.player;
+    g.debugStep(3);
+    g.spawnEnemy('mite', p.x + 12, p.z, false);
+    const e = g.enemies[g.enemies.length - 1];
+    e.dead = true; g.onEnemyKilled(e);
+    g.plantEcho(p.x + 6, p.z + 6, 'manual');
+    p.invuln = 0; g.hurtPlayer(5, p.x + 1, p.z);
+    p.invuln = 0; p.hp = 1; g.hurtPlayer(500, p.x + 1, p.z);
+    g.debugStep(90);
+    return { ...window.__seen };
+  });
+  await page.click('#btn-reseed');
+  const gate = await page.evaluate(() => {
+    // the gate: a purged pylon the edition bars stays out of reach
+    const g = window.__wk, py = g.world.pylons[0];
+    py.setState('done');
+    g.hooks.travelGate = (x, z) => (x === py.pos.x && z === py.pos.z ? 'barred' : null);
+    g.openOverlay('map'); g.mapClick(py.pos.x, py.pos.z);
+    const out = { toast: document.getElementById('toast').textContent, busy: g.travelBusy };
+    g.hooks.travelGate = null;
+    g.ui.hide('map');
+    return out;
+  });
+  await page.evaluate(() => window.__wk.debugGoto(2));
+  const after = await page.evaluate(() => window.__seen);
+  check('hooks: tick, spawn, kill, echo, hurt and death fire', r.tick > 0 && r.spawn >= 1 && r.kill >= 1 && r.echo >= 1 && r.hurt >= 2 && r.death === 1, JSON.stringify(r));
+  check('hooks: the travel gate bars a purged pylon', gate.toast === 'barred' && !gate.busy, `toast=${gate.toast}`);
+  check('hooks: respawn and stratum fire', after.respawn >= 1 && after.stratum >= 1, JSON.stringify(after));
+  check('hooks: no console errors', logs.length === 0, logs.join(' | '));
+  await close();
+}
+
 // ---- 9. save -> reload -> continue (gear and skills persist)
 {
   const { page, logs, close } = await fresh(1);

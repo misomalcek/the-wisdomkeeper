@@ -43,6 +43,7 @@ import { setSurfaceDetail } from './engine/proctex';
 import { strongestDrift } from './world/genome';
 import { perf } from './engine/perf';
 import { flagState } from './engine/flags';
+import { GameHooks } from './systems/hooks';
 
 type Mode = 'title' | 'prologue' | 'play' | 'choice' | 'transition' | 'dead' | 'ending';
 
@@ -61,7 +62,7 @@ interface PendingSpawn {
   fx: number;
 }
 
-interface CampState {
+export interface CampState {
   spec: CampSpec;
   enemies: Enemy[];
   cleared: boolean;
@@ -129,6 +130,8 @@ export class Game {
   encounter: { enc: Encounter; anchor: MemoryNode | Pylon; kind: 'node' | 'pylon' } | null = null;
   private pending: PendingSpawn[] = [];
   private camps: CampState[] = [];
+  /** The edition surface: events and the decisions an edition may join (inert in the web edition). */
+  readonly hooks = new GameHooks();
   private boss: Enemy | null = null;
   private bossDown = false;
   private stratumEchoes = 0;
@@ -618,6 +621,7 @@ export class Game {
       this.pendingNote = '';
     }, 1800);
     this.saveRun();
+    this.hooks.emit('stratum', { index, id: this.def.id });
   }
 
   private exitStratum(choice: Choice | null) {
@@ -710,6 +714,7 @@ export class Game {
     this.audio.sfx('plant');
     this.ui.say('The soil remembers. I rise where I last listened.');
     this.input.requestLock();
+    this.hooks.emit('respawn', { x: cp.x, z: cp.z });
   }
 
   // ---------------------------------------------------------------- main loop
@@ -1013,6 +1018,7 @@ export class Game {
   // ---------------------------------------------------------------- play loop
 
   private updatePlay(dt: number) {
+    const frameDt = dt;
     const p = this.player;
     const dead = this.mode === 'dead';
     this.updateWheel(dt, dead);
@@ -1084,6 +1090,7 @@ export class Game {
     this.audio.setIntensity(clamp(alive / 14 + (this.encounter ? 0.25 : 0) + (this.boss?.activated && !this.bossDown ? 0.4 : 0), 0, 1));
 
     this.drawHud();
+    this.hooks.emit('tick', { dt: frameDt });
   }
 
   private handleActions() {
@@ -1181,6 +1188,7 @@ export class Game {
   }
 
   onEnemyKilled(e: Enemy) {
+    this.hooks.emit('kill', { enemy: e });
     if (e.kind === 'drone') this.missionProgress('hunt', 1, e.x, e.z, 1);
     else if (e.kind === 'brute') this.missionProgress('hunt', 1, e.x, e.z, 0);
     if (e.campId < 0) return;
@@ -1205,6 +1213,16 @@ export class Game {
   campCleared(nodeIndex: number) {
     const c = this.camps.find((x) => x.spec.nodeIndex === nodeIndex);
     return !c || c.cleared;
+  }
+
+  /** Edition surface (read-only): this stratum's camps. */
+  get campStates(): readonly CampState[] {
+    return this.camps;
+  }
+
+  /** Edition surface: a gate transition (or the ending) is under way. */
+  get inTransition() {
+    return !!this.trans;
   }
 
   get pendingSpawnCount() {
@@ -1256,6 +1274,7 @@ export class Game {
     const e = this.makeEnemy(kind, x, z, fromEvent, variant);
     const y = this.world.terrain.heightAt(x, z);
     this.particles.burst(new THREE.Vector3(x, y + 1, z), HOT, kind === 'boss' ? 40 : 10, 6, 0.5, 0.6);
+    this.hooks.emit('spawn', { enemy: e, kind, x, z });
     return e;
   }
 
@@ -1584,6 +1603,7 @@ export class Game {
     if (p.shield > 0) {
       this.combat.shieldAbsorb(dmgIn, p.x, p.y + 1, p.z);
       p.invuln = 0.15;
+      this.hooks.emit('hurt', { amount: 0, x: sx, z: sz });
       return true;
     }
     const dmg = dmgIn * (1 - this.derived.dr);
@@ -1603,6 +1623,7 @@ export class Game {
     this.ui.hurtFlash();
     this.audio.sfx('hurt');
     this.particles.burst(new THREE.Vector3(p.x, p.y + 1, p.z), HOT.clone().multiplyScalar(2), 14, 8, 0.5, 0.6);
+    this.hooks.emit('hurt', { amount: dmg, x: sx, z: sz });
     if (p.hp <= 0) this.killPlayer();
     return true;
   }
@@ -1620,6 +1641,7 @@ export class Game {
     this.audio.sfx('surge');
     this.shake(1.2);
     this.releaseLockQuiet();
+    this.hooks.emit('death', { x: p.x, z: p.z });
   }
 
   collect(kind: PickupKind, item?: Item) {
@@ -1907,6 +1929,7 @@ export class Game {
       this.firstEcho = false;
       this.ui.toast('An echo-tree takes root where the story happened.');
     }
+    this.hooks.emit('echo', { x, z, source });
     return true;
   }
 
@@ -2013,6 +2036,7 @@ export class Game {
     this.gainXp(100);
     this.ui.toast('Pylon purged — fast travel unlocked [M]');
     this.punch('pylon', `Pylon purged in ${this.def.name}`);
+    this.hooks.emit('pylon', { pylon: py });
   }
 
   private completeNode(node: MemoryNode) {
@@ -2099,6 +2123,7 @@ export class Game {
       this.ui.say(this.def.gateText);
     }
     this.saveRun();
+    this.hooks.emit('remembrance', { choice: c });
   }
 
   private enterGate() {
@@ -2380,6 +2405,11 @@ export class Game {
   private fastTravel(py: Pylon) {
     if (py.state !== 'done') {
       this.ui.toast('Purge this Pylon to unlock fast travel');
+      return;
+    }
+    const barred = this.hooks.travelGate?.(py.pos.x, py.pos.z);
+    if (barred) {
+      this.ui.toast(barred);
       return;
     }
     if (this.travelBusy) return;
