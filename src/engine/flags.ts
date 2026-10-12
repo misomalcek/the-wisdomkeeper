@@ -52,6 +52,19 @@ export const ALL_FLAGS = [...Object.keys(SHAPE), ...Object.keys(LOOK)] as Flag[]
 let overrides: Partial<Record<Flag, boolean>> = {};
 let baseline = false;
 
+/**
+ * What each tier can afford for the systems that scale with the machine. Look only: none of it moves the land, so
+ * a 2 GB laptop and a desktop grow the same world. Ultra is the desktop tier (the Infinite Evolutions default on
+ * machines with 16 GB or more): a wider living field, a Physarum window as wide as the horizon, and fine trees one
+ * chunk ring further out.
+ */
+export const BUDGET: Record<Tier, { living: number; netSize: number; netCell: number; netAgents: number; fineTreeRing: number }> = {
+  low: { living: 96, netSize: 320, netCell: 8, netAgents: 7000, fineTreeRing: -1 },
+  medium: { living: 128, netSize: 512, netCell: 6, netAgents: 14000, fineTreeRing: 1 },
+  high: { living: 128, netSize: 512, netCell: 6, netAgents: 14000, fineTreeRing: 1 },
+  ultra: { living: 192, netSize: 768, netCell: 6, netAgents: 24000, fineTreeRing: 2 },
+};
+
 /** Parse a `pf` value ("none,-orbit,+wind"). Unknown keys are ignored. */
 export function parseFlags(spec: string | null) {
   overrides = {};
@@ -77,6 +90,8 @@ export const flagTier = () => tier;
 export function setFlagTier(t: Tier) {
   tier = t;
 }
+/** The current tier's budgets. */
+export const budget = () => BUDGET[tier];
 
 export function flag(k: Flag): boolean {
   if (k in overrides) return overrides[k]!;

@@ -120,7 +120,7 @@ export class World {
     this.rng = new Rng(baseSeed ^ 0x51ed);
     // the World Genome: this seed and region, evolved by every choice already recorded on the run
     this.genome = flag('genome') ? regionGenome(run.seed, def.id, run) : neutralGenome();
-    this.drifts = flag('genome') ? lineageDrifts(run) : [];
+    this.drifts = flag('genome') ? lineageDrifts(run, def.id) : [];
     // each region grows its own ground, stone and bark textures, and writes its own Julia sigils
     buildSurfaces(baseSeed, flag('glyphs') ? juliaConstant(this.genome) : null);
     const rng = this.rng;

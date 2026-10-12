@@ -12,7 +12,7 @@ import { Biome } from './gen/field';
 import { CANOPY, DRAGON, SPIRE, SHRUB, BLIGHT, TREE_SPECIES, TREE_LODS, type TreeSpecies } from './gen/meshgen/trees';
 import { TREE_VARIANTS, BOULDER_VARIANTS, HOODOO_VARIANTS, CRYSTAL_VARIANTS, treeKey, boulderKey, hoodooKey, crystalKey, tuftKey } from './gen/meshgen/index';
 import { loadProtos, protoGeometry, whenProtos } from './protos';
-import { flagTier } from '../engine/flags';
+import { budget } from '../engine/flags';
 import type { GroundSample } from './gen/shape';
 import { vogel } from './gen/phyllotaxis';
 import { growHyphae } from './gen/hyphae';
@@ -308,9 +308,9 @@ export class Wilds {
 
   /** LOD for a chunk at Chebyshev distance d from the hero's chunk (the low tier always draws the light trees). */
   private lodFor(d: number) {
-    return this.lowTier || d > 1 ? 1 : 0;
+    return d > this.fineRing ? 1 : 0;
   }
-  private readonly lowTier = flagTier() === 'low';
+  private readonly fineRing = budget().fineTreeRing;
 
   /** (Re)write a chunk's generated trees and stones into the pools of its current LOD. */
   private emitPlaced(c: WildChunk) {

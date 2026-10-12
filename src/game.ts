@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Affinity, BossVariant, Choice, EnemyKind, Item, LibraryEntry, PlayStats, PunchKind, Remembrance, RunState, Skin } from './types';
 import { setPortraitRenderer } from './ui/portrait';
-import { Gfx } from './engine/gfx';
+import { Gfx, QUALITIES, SETTINGS_KEY, savedQuality, type Quality } from './engine/gfx';
 import { ThirdPersonCam } from './engine/camera';
 import { Input } from './engine/input';
 import { AudioEngine } from './engine/audio';
@@ -42,13 +42,14 @@ import { StorycardsPanel } from './ui/storycardsPanel';
 import { setSurfaceDetail } from './engine/proctex';
 import { strongestDrift } from './world/genome';
 import { perf } from './engine/perf';
-import { flagState } from './engine/flags';
+import { flagState, setFlagTier } from './engine/flags';
+import { GameHooks } from './systems/hooks';
 
 type Mode = 'title' | 'prologue' | 'play' | 'choice' | 'transition' | 'dead' | 'ending';
 
 const SAVE_KEY = 'wk.run.v2';
 const LIB_KEY = 'wk.library.v1';
-const SET_KEY = 'wk.settings.v1';
+const SET_KEY = SETTINGS_KEY;
 const HOT = new THREE.Color(0xff3b7a);
 const TOTAL_REMEMBRANCES = 7;
 
@@ -61,7 +62,7 @@ interface PendingSpawn {
   fx: number;
 }
 
-interface CampState {
+export interface CampState {
   spec: CampSpec;
   enemies: Enemy[];
   cleared: boolean;
@@ -129,6 +130,8 @@ export class Game {
   encounter: { enc: Encounter; anchor: MemoryNode | Pylon; kind: 'node' | 'pylon' } | null = null;
   private pending: PendingSpawn[] = [];
   private camps: CampState[] = [];
+  /** The edition surface: events and the decisions an edition may join (inert in the web edition). */
+  readonly hooks = new GameHooks();
   private boss: Enemy | null = null;
   private bossDown = false;
   private stratumEchoes = 0;
@@ -226,16 +229,21 @@ export class Game {
     this.ui.setMuteLabel(this.audio.muted);
     this.ui.setBloomLabel(this.gfx.bloomEnabled);
   }
+  /** The quality the player picked (kept in settings), or undefined for the device default. */
+  private quality: Quality | undefined = savedQuality() ?? undefined;
+
   private saveSettings() {
     store.set(SET_KEY, {
       vol: this.audio.volume,
       muted: this.audio.muted,
       bloom: this.gfx.bloomEnabled,
       sens: Math.round((this.cam.sens / 0.0022) * 100),
+      ...(this.quality ? { quality: this.quality } : {}),
     });
   }
   saveRun() {
     this.run.fiber = Math.round(this.player.fiber);
+    this.hooks.emit('save', { run: this.run });
     store.set(SAVE_KEY, this.run);
     this.deck.push(buildStorycard(this.run));
   }
@@ -298,6 +306,16 @@ export class Game {
       ui.setMuteLabel(this.audio.toggleMute());
       this.saveSettings();
     });
+    ui.on('btn-quality', () => {
+      // look only: the renderer switches now, world budgets (living field, Physarum, fine trees) from the next region
+      const q = QUALITIES[(QUALITIES.indexOf(this.gfx.quality) + 1) % QUALITIES.length];
+      this.quality = q;
+      this.gfx.setQuality(q);
+      setFlagTier(q);
+      ui.setQualityLabel(q);
+      ui.toast(q === 'ultra' ? 'Ultra: for desktops. Wider living field and network from the next region' : `Quality: ${q}`);
+      this.saveSettings();
+    });
     ui.on('btn-bloom', () => {
       this.gfx.setBloom(!this.gfx.bloomEnabled);
       ui.setBloomLabel(this.gfx.bloomEnabled);
@@ -347,6 +365,7 @@ export class Game {
     }
     this.ui.setMuteLabel(this.audio.muted);
     this.ui.setBloomLabel(this.gfx.bloomEnabled);
+    this.ui.setQualityLabel(this.gfx.quality);
   }
 
   /** After closing a sub-overlay: back to the pause menu if paused from there, else resume. */
@@ -422,6 +441,7 @@ export class Game {
     this.punch('cycle', 'Cycle 1 began — a seed in the soil of code');
     store.del(SAVE_KEY);
     this.startPrologue([OPENING_QUOTE, SECOND_QUOTE]);
+    this.hooks.emit('story', { seed: this.run.seed });
   }
 
   private beginNextCycle() {
@@ -600,7 +620,9 @@ export class Game {
     }
 
     // the World Genome: the strongest way this run's choices reshaped the region is told once and punched on the card
-    const drift = this.def.boss ? null : strongestDrift(this.world.drifts);
+    // a mind's decision for this region is news; otherwise the strongest inherited drift is told
+    const decided = this.run.mutations?.filter((r) => r.stratum === this.def.id && r.cycle === this.run.cycle).pop();
+    const drift = this.def.boss ? null : decided ? { m: decided.m, why: decided.why } : strongestDrift(this.world.drifts);
     if (lastPunchOf(this.run, 'stratum')?.stratum !== index) {
       this.punch('stratum', `Entered ${this.def.name} — ${this.def.act}`);
       if (drift) this.punch('land', `${this.def.name} grew from ${drift.why}`);
@@ -618,6 +640,7 @@ export class Game {
       this.pendingNote = '';
     }, 1800);
     this.saveRun();
+    this.hooks.emit('stratum', { index, id: this.def.id });
   }
 
   private exitStratum(choice: Choice | null) {
@@ -646,6 +669,7 @@ export class Game {
     const gatePos = g ? g.pos.clone().setY(g.group.position.y) : this.player.group.position.clone();
     this.trans = { t: 0, next, gate: gatePos };
     this.mode = 'transition';
+    this.hooks.emit('transition', { next, id: STRATA[next]?.id ?? '' });
     this.ui.setHudVisible(false);
     this.ui.fade(true, 'white', 1500);
     this.audio.sfx('gate');
@@ -710,6 +734,7 @@ export class Game {
     this.audio.sfx('plant');
     this.ui.say('The soil remembers. I rise where I last listened.');
     this.input.requestLock();
+    this.hooks.emit('respawn', { x: cp.x, z: cp.z });
   }
 
   // ---------------------------------------------------------------- main loop
@@ -1013,6 +1038,7 @@ export class Game {
   // ---------------------------------------------------------------- play loop
 
   private updatePlay(dt: number) {
+    const frameDt = dt;
     const p = this.player;
     const dead = this.mode === 'dead';
     this.updateWheel(dt, dead);
@@ -1084,6 +1110,7 @@ export class Game {
     this.audio.setIntensity(clamp(alive / 14 + (this.encounter ? 0.25 : 0) + (this.boss?.activated && !this.bossDown ? 0.4 : 0), 0, 1));
 
     this.drawHud();
+    this.hooks.emit('tick', { dt: frameDt });
   }
 
   private handleActions() {
@@ -1181,6 +1208,7 @@ export class Game {
   }
 
   onEnemyKilled(e: Enemy) {
+    this.hooks.emit('kill', { enemy: e });
     if (e.kind === 'drone') this.missionProgress('hunt', 1, e.x, e.z, 1);
     else if (e.kind === 'brute') this.missionProgress('hunt', 1, e.x, e.z, 0);
     if (e.campId < 0) return;
@@ -1205,6 +1233,21 @@ export class Game {
   campCleared(nodeIndex: number) {
     const c = this.camps.find((x) => x.spec.nodeIndex === nodeIndex);
     return !c || c.cleared;
+  }
+
+  /** Edition surface: the Storycards panel (an edition may route its downloads, e.g. to a native save dialog). */
+  get storycards(): StorycardsPanel {
+    return this.cards;
+  }
+
+  /** Edition surface (read-only): this stratum's camps. */
+  get campStates(): readonly CampState[] {
+    return this.camps;
+  }
+
+  /** Edition surface: a gate transition (or the ending) is under way. */
+  get inTransition() {
+    return !!this.trans;
   }
 
   get pendingSpawnCount() {
@@ -1256,6 +1299,7 @@ export class Game {
     const e = this.makeEnemy(kind, x, z, fromEvent, variant);
     const y = this.world.terrain.heightAt(x, z);
     this.particles.burst(new THREE.Vector3(x, y + 1, z), HOT, kind === 'boss' ? 40 : 10, 6, 0.5, 0.6);
+    this.hooks.emit('spawn', { enemy: e, kind, x, z });
     return e;
   }
 
@@ -1584,6 +1628,7 @@ export class Game {
     if (p.shield > 0) {
       this.combat.shieldAbsorb(dmgIn, p.x, p.y + 1, p.z);
       p.invuln = 0.15;
+      this.hooks.emit('hurt', { amount: 0, x: sx, z: sz });
       return true;
     }
     const dmg = dmgIn * (1 - this.derived.dr);
@@ -1603,6 +1648,7 @@ export class Game {
     this.ui.hurtFlash();
     this.audio.sfx('hurt');
     this.particles.burst(new THREE.Vector3(p.x, p.y + 1, p.z), HOT.clone().multiplyScalar(2), 14, 8, 0.5, 0.6);
+    this.hooks.emit('hurt', { amount: dmg, x: sx, z: sz });
     if (p.hp <= 0) this.killPlayer();
     return true;
   }
@@ -1620,6 +1666,7 @@ export class Game {
     this.audio.sfx('surge');
     this.shake(1.2);
     this.releaseLockQuiet();
+    this.hooks.emit('death', { x: p.x, z: p.z });
   }
 
   collect(kind: PickupKind, item?: Item) {
@@ -1907,6 +1954,7 @@ export class Game {
       this.firstEcho = false;
       this.ui.toast('An echo-tree takes root where the story happened.');
     }
+    this.hooks.emit('echo', { x, z, source });
     return true;
   }
 
@@ -2013,6 +2061,7 @@ export class Game {
     this.gainXp(100);
     this.ui.toast('Pylon purged — fast travel unlocked [M]');
     this.punch('pylon', `Pylon purged in ${this.def.name}`);
+    this.hooks.emit('pylon', { pylon: py });
   }
 
   private completeNode(node: MemoryNode) {
@@ -2099,6 +2148,7 @@ export class Game {
       this.ui.say(this.def.gateText);
     }
     this.saveRun();
+    this.hooks.emit('remembrance', { choice: c });
   }
 
   private enterGate() {
@@ -2380,6 +2430,11 @@ export class Game {
   private fastTravel(py: Pylon) {
     if (py.state !== 'done') {
       this.ui.toast('Purge this Pylon to unlock fast travel');
+      return;
+    }
+    const barred = this.hooks.travelGate?.(py.pos.x, py.pos.z);
+    if (barred) {
+      this.ui.toast(barred);
       return;
     }
     if (this.travelBusy) return;

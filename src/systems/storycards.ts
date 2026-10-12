@@ -12,12 +12,13 @@
  */
 import type {
   Affinity, EchoRecord, HistoryEntry, Item, LibraryEntry, Mission, MissionKind, Punch, PunchKind, Rarity, Remembrance, RunState, Skin, Slot,
-  StatKey, StratumId,
+  StatKey, StratumId, MutationAuthor, RegionMutation,
 } from '../types';
 import { STRATA } from '../story/strata';
 import { AFFINITY_META } from '../story/story';
 import { freshTelemetry, type PlayerTelemetry } from '../bio/mindState';
 import { fmtTime } from '../util/math';
+import { GENE_KEYS, MAX_MUTATIONS, clampMutation } from '../world/genome';
 
 export const STORYCARD_FORMAT = 'wisdomkeeper.storycard';
 export const STORYCARD_VERSION = 1;
@@ -258,6 +259,24 @@ const ident = (v: unknown, path: string) => {
   return s;
 };
 const stratumIdx = (v: unknown, path: string) => int(v, path, 0, STRATA.length - 1);
+const AUTHORS: readonly MutationAuthor[] = ['warden', 'symbiote', 'rule'];
+
+/** A recorded genome mutation: known genes and finite steps only, clamped like a fresh proposal. */
+function vMutation(v: unknown, path: string): RegionMutation {
+  const o = obj(v, path);
+  const mIn = obj(o.m, `${path}.m`);
+  for (const k of Object.keys(mIn)) {
+    if (!(GENE_KEYS as string[]).includes(k)) fail(`${path}.m.${k}`, 'is not a gene');
+    num(mIn[k], `${path}.m.${k}`, -1, 1);
+  }
+  return {
+    stratum: oneOf(o.stratum, `${path}.stratum`, STRATUM_IDS),
+    cycle: int(o.cycle, `${path}.cycle`, 1, 9999),
+    m: clampMutation(mIn) as Record<string, number>,
+    by: oneOf(o.by, `${path}.by`, AUTHORS),
+    why: str(o.why, `${path}.why`, 200),
+  };
+}
 
 function vItem(v: unknown, path: string): Item {
   const o = obj(v, path);
@@ -359,6 +378,12 @@ function vLibrary(v: unknown, path: string): LibraryEntry {
   };
 }
 
+/**
+ * Edition hook: a build that adds its own block to the run (the desktop edition's `evolution` chronicle) registers
+ * a validator here. Without one, an unknown block is dropped like any other unknown field.
+ */
+export const runExtensions: { evolution?: (v: unknown, path: string) => unknown } = {};
+
 /** Validates an untrusted RunState and rebuilds it from known fields only (older optional fields are filled in). */
 export function validateRun(v: unknown, path = 'run'): RunState {
   const o = obj(v, path);
@@ -413,6 +438,9 @@ export function validateRun(v: unknown, path = 'run'): RunState {
   if (fiber !== undefined) run.fiber = fiber;
   const punches = opt(o.punches, (x) => arr(x, `${path}.punches`, MAX_PUNCHES * 5).map((p, i) => vPunch(p, `${path}.punches[${i}]`)));
   if (punches) run.punches = punches.slice(-MAX_PUNCHES);
+  const mutations = opt(o.mutations, (x) => arr(x, `${path}.mutations`, MAX_MUTATIONS).map((m, i) => vMutation(m, `${path}.mutations[${i}]`)));
+  if (mutations) run.mutations = mutations;
+  if (o.evolution !== undefined && runExtensions.evolution) run.evolution = runExtensions.evolution(o.evolution, `${path}.evolution`);
   return run;
 }
 

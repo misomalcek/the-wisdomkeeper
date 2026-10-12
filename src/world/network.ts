@@ -1,5 +1,5 @@
 import type { Terrain } from './terrain';
-import { flagTier } from '../engine/flags';
+import { budget } from '../engine/flags';
 
 /**
  * The Physarum network of a region (gen/physarum, grown in network.worker): veins of living light that link the
@@ -24,7 +24,6 @@ export class Network {
     this.S = net.size;
     this.cell = net.cell;
     if (typeof Worker === 'undefined') return;
-    const low = flagTier() === 'low';
     this.worker = new Worker(new URL('./network.worker.ts', import.meta.url), { type: 'module' });
     this.worker.onmessage = (e: MessageEvent<{ type: string; rg: Uint8Array; cx: number; cz: number }>) => {
       const m = e.data;
@@ -38,7 +37,7 @@ export class Network {
     this.worker.postMessage({
       type: 'init',
       shape: terrain.shapeOpts,
-      net: { size: net.size, cell: net.cell, agents: low ? 7000 : 14000, seed: o.siteSeed },
+      net: { size: net.size, cell: net.cell, agents: budget().netAgents, seed: o.siteSeed },
       siteSeed: o.siteSeed,
       stations: o.stations,
       rate: 10,

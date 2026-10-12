@@ -10,7 +10,7 @@ import { fractalTexture, surfaceDetail, surfaces } from '../engine/proctex';
 import { GroundShape, type ShapeOpts } from './gen/shape';
 import type { WildField } from './gen/field';
 import type { Palette } from '../story/strata';
-import { flag, flagTier } from '../engine/flags';
+import { budget, flag } from '../engine/flags';
 import type { Isle } from './gen/orbit';
 
 export interface TerrainOpts extends ShapeOpts {
@@ -87,11 +87,11 @@ export class Terrain {
       isleB: uniform(new THREE.Vector4(1, 0, 0, 0)),
     };
     if (flag('living')) {
-      this.living = { ...rgTexture(flagTier() === 'low' ? 96 : 128), cell: 1.5 };
+      this.living = { ...rgTexture(budget().living), cell: 1.5 };
     }
     if (o.wild && flag('network')) {
-      const low = flagTier() === 'low';
-      this.network = { ...rgTexture(low ? 320 : 512), cell: low ? 8 : 6 };
+      const b = budget();
+      this.network = { ...rgTexture(b.netSize), cell: b.netCell };
     }
     this.material = this.buildMaterial();
   }
