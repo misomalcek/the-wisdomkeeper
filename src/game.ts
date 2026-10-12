@@ -232,6 +232,18 @@ export class Game {
   /** The quality the player picked (kept in settings), or undefined for the device default. */
   private quality: Quality | undefined = savedQuality() ?? undefined;
 
+  /**
+   * Switches the quality tier and remembers it on this machine. Look only: the renderer switches now, world budgets
+   * (living field, Physarum, fine trees) from the next region. An edition may pick a machine's first tier with it.
+   */
+  setQuality(q: Quality) {
+    this.quality = q;
+    this.gfx.setQuality(q);
+    setFlagTier(q);
+    this.ui.setQualityLabel(q);
+    this.saveSettings();
+  }
+
   private saveSettings() {
     store.set(SET_KEY, {
       vol: this.audio.volume,
@@ -307,14 +319,9 @@ export class Game {
       this.saveSettings();
     });
     ui.on('btn-quality', () => {
-      // look only: the renderer switches now, world budgets (living field, Physarum, fine trees) from the next region
       const q = QUALITIES[(QUALITIES.indexOf(this.gfx.quality) + 1) % QUALITIES.length];
-      this.quality = q;
-      this.gfx.setQuality(q);
-      setFlagTier(q);
-      ui.setQualityLabel(q);
+      this.setQuality(q);
       ui.toast(q === 'ultra' ? 'Ultra: for desktops. Wider living field and network from the next region' : `Quality: ${q}`);
-      this.saveSettings();
     });
     ui.on('btn-bloom', () => {
       this.gfx.setBloom(!this.gfx.bloomEnabled);
