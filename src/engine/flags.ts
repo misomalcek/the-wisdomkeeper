@@ -65,6 +65,8 @@ export function parseFlags(spec: string | null) {
 parseFlags(typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('pf'));
 
 let tier: Tier = 'high';
+/** The current render tier (for sizing tier-dependent systems). */
+export const flagTier = () => tier;
 /** The render tier picks look-flag defaults (set once the renderer knows its quality). */
 export function setFlagTier(t: Tier) {
   tier = t;

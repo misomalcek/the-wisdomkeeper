@@ -21,7 +21,9 @@ import { VeilSetPiece, layoutVeil, type VeilLayout } from './veil';
 import { buildSurfaces } from '../engine/proctex';
 import { perf } from '../engine/perf';
 import { flag } from '../engine/flags';
-import { lineageDrifts, neutralGenome, regionGenome, type Drift, type Genome } from './genome';
+import { juliaConstant, lineageDrifts, neutralGenome, regionGenome, type Drift, type Genome } from './genome';
+import { biomeStyle, nullColour } from './biomeStyle';
+import { LivingField } from '../bio/livingField';
 
 /** How much traversal furniture each region gets. */
 const TRAVERSAL: Record<string, { mush: number; drift: number; crystals: number; pods: number }> = {
@@ -64,6 +66,8 @@ export class World {
   readonly genome: Genome;
   /** Why this region's genome differs from its birth genome (narrated on entry). */
   readonly drifts: Drift[];
+  /** Null corruption fronts and purification waves around the hero (null when the look flag is off). */
+  readonly living: LivingField | null = null;
   readonly terrain: Terrain;
   /** Chunk-streamed ground (one batched draw call). */
   readonly ground: TerrainStreamer;
@@ -100,12 +104,12 @@ export class World {
     this.radius = def.radius * params.arenaScale;
     this.palette = shiftPalette(def.palette, def.id === 'return' ? 0 : params.hueShift);
     const baseSeed = hashString(`${run.seed}:${def.id === 'return' ? 'seedbed' : def.id}`);
-    // each region grows its own ground, stone and bark textures
-    buildSurfaces(baseSeed);
     this.rng = new Rng(baseSeed ^ 0x51ed);
     // the World Genome: this seed and region, evolved by every choice already recorded on the run
     this.genome = flag('genome') ? regionGenome(run.seed, def.id, run) : neutralGenome();
     this.drifts = flag('genome') ? lineageDrifts(run) : [];
+    // each region grows its own ground, stone and bark textures, and writes its own Julia sigils
+    buildSurfaces(baseSeed, flag('glyphs') ? juliaConstant(this.genome) : null);
     const rng = this.rng;
 
     this.terrain = new Terrain({
@@ -122,7 +126,13 @@ export class World {
       genome: this.genome,
       features: { erosion: flag('erosion'), terrace: flag('terrace'), orbit: flag('orbit') },
     });
-    this.ground = new TerrainStreamer(this.terrain);
+    if (flag('genome')) this.terrain.setNullColour(nullColour(this.genome));
+    this.ground = new TerrainStreamer(this.terrain, biomeStyle(this.genome, flag('oklab')));
+    const lt = this.terrain.living;
+    if (lt) {
+      this.living = new LivingField({ size: lt.size, cell: lt.cell, excite: this.genome.excite, mercy: this.genome.mercy }, (x, z) => this.terrain.blightAt(x, z));
+      this.living.sources = this.terrain.corruptions.map(() => ({ x: 0, z: 0, r: 1, s: 0 }));
+    }
     this.group.add(this.ground.mesh);
     this.physics = new Physics((x, z) => this.terrain.heightAt(x, z));
     if (this.ground.threaded) this.physics.heightSource = (i, j, size, res) => this.ground.physicsHeights(i, j, size, res);
@@ -409,11 +419,46 @@ export class World {
     perf.start('physics');
     this.physics.streamTerrain(x, z);
     perf.stop('physics');
+    if (flag('coast')) this.terrain.setCoastIsle(this.terrain.wild?.isles?.nearestBaked(x, z) ?? null);
+  }
+
+  /** A purification event (kill, purge, Surge): a ring of living light runs out from (x, z) over the ground. */
+  purify(x: number, z: number, radius: number) {
+    this.living?.pulse(x, z, radius);
+  }
+
+  /** Corruption and purification glow under a point (both 0 when the living field is off). */
+  livingAt(x: number, z: number) {
+    return this.living ? this.living.at(x, z, this.lv) : ((this.lv.c = this.lv.u = 0), this.lv);
+  }
+  private lv = { c: 0, u: 0 };
+
+  private updateLiving(dt: number, player: THREE.Vector3) {
+    const L = this.living;
+    const lt = this.terrain.living;
+    if (!L || !lt) return;
+    perf.start('living');
+    L.follow(player.x, player.z);
+    const cs = this.terrain.corruptions;
+    for (let i = 0; i < cs.length; i++) {
+      const s = L.sources[i];
+      s.x = cs[i].x;
+      s.z = cs[i].y;
+      s.r = cs[i].z;
+      s.s = cs[i].w;
+    }
+    if (L.update(dt, 1) > 0) {
+      L.write(lt.data);
+      const [cx, cz] = L.centre;
+      this.terrain.setLiving(cx, cz);
+    }
+    perf.stop('living');
   }
 
   /** Build everything around (x, z) at once (region entry, respawn, fast travel). */
   prime(x: number, z: number) {
     this.ground.prime(x, z);
+    this.living?.follow(x, z);
     this.wilds?.prime(x, z);
     this.physics.prime(x, z);
   }
@@ -421,6 +466,7 @@ export class World {
   update(dt: number, t: number, camPos: THREE.Vector3, _pointScale: number, player: THREE.Vector3) {
     worldTime.value = t;
     this.terrain.update(t);
+    this.updateLiving(dt, player);
     this.flora.update(t);
     this.mycelium.update(dt, t);
     this.grove.update(dt);

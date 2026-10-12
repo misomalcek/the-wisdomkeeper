@@ -5,6 +5,8 @@ import {
   materialColor, diffuseColor, cameraPosition, normalize, atan, positionView, color,
 } from 'three/tsl';
 import { proceduralBump, worldTime, floraGlow, type N } from './materials';
+import { flag } from './flags';
+import { instanceIndex, positionLocal, hash } from 'three/tsl';
 import { fractalTexture, surfaceDetail, surfaces } from './proctex';
 
 /**
@@ -111,6 +113,13 @@ export function tuftMaterial(k: number) {
   const streak: N = abs(sin(atan(positionGeometry.z, positionGeometry.x).mul(6).add(positionWorld.x.mul(3)))).mul(0.25).add(0.75);
   m.colorNode = materialColor.mul(mix(float(0.35), float(1.15), h)).mul(streak);
   m.emissiveNode = diffuseColor.rgb.mul(float(k).mul(pow(h, float(2.5)).mul(1.8).add(0.15))).mul(floraGlow);
+  if (flag('wind')) {
+    // wind: blades bend with the square of their height, each instance on its own phase, under slow gusts
+    const ph: N = hash(instanceIndex).mul(6.283);
+    const gust: N = sin(worldTime.mul(0.7).add(ph.mul(0.3))).mul(0.5).add(0.8);
+    const sway: N = sin(worldTime.mul(2.3).add(ph)).mul(gust).mul(h.mul(h)).mul(0.12);
+    m.positionNode = positionLocal.add(vec3(sway, 0, sway.mul(0.6)));
+  }
   return m;
 }
 

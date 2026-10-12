@@ -111,6 +111,20 @@ export function lineageDrifts(run: Pick<RunState, 'remembrances' | 'history' | '
   return out;
 }
 
+/** The drift that moved the genome furthest (for the region-entry narration), or null. */
+export function strongestDrift(ds: Drift[]): Drift | null {
+  let best: Drift | null = null;
+  let bm = 0;
+  for (const d of ds) {
+    const m = Object.values(d.m).reduce((a, v) => a + Math.abs(v ?? 0), 0);
+    if (m > bm) {
+      bm = m;
+      best = d;
+    }
+  }
+  return best;
+}
+
 /** The genome of a region on this run: birth genome plus every recorded drift. */
 export function regionGenome(seed: number, stratum: StratumId, run?: Pick<RunState, 'remembrances' | 'history' | 'latent' | 'cycle' | 'tiers'>): Genome {
   let g = baseGenome(seed, stratum);
@@ -135,7 +149,7 @@ export function juliaConstant(g: Pick<Genome, 'juliaA' | 'juliaB'>): [number, nu
   if (fam === 0) {
     // main cardioid: c = μ/2 − μ²/4 with |μ| < 1 (μ = multiplier of the attracting fixed point)
     const th = u * Math.PI * 2;
-    const mr = depth;
+    const mr = 0.25 + 0.72 * depth; // 0.65..0.93: near the boundary, where the coastline gets its bays and fingers
     const mx = mr * Math.cos(th);
     const my = mr * Math.sin(th);
     return [mx / 2 - (mx * mx - my * my) / 4, my / 2 - (2 * mx * my) / 4];

@@ -106,7 +106,7 @@ export interface RunState {
 }
 
 export type PunchKind =
-  | 'cycle' | 'stratum' | 'camp' | 'pylon' | 'remembrance' | 'contact' | 'choice' | 'mission' | 'boss' | 'level' | 'death' | 'ending' | 'note';
+  | 'cycle' | 'stratum' | 'camp' | 'pylon' | 'remembrance' | 'contact' | 'choice' | 'mission' | 'boss' | 'level' | 'death' | 'ending' | 'note' | 'land';
 /** One human-readable story beat punched onto the player's Storycard. */
 export interface Punch {
   kind: PunchKind;

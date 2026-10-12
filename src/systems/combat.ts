@@ -292,6 +292,7 @@ export class Combat {
     }
     g.stratumKills++;
     g.run.kills++;
+    g.world.purify(e.x, e.z, e.kind === 'brute' || e.kind === 'boss' ? 5 : 2.5);
     this.gainRes(e.value * 3.5);
     g.particles.burst(pos, HOT.clone().multiplyScalar(3), e.kind === 'brute' ? 40 : 18, 9, 0.6, 0.8);
     g.particles.ring(pos, new THREE.Color(0x5cffc1).multiplyScalar(2), 14, 8, 0.4, 0.6);
@@ -451,6 +452,7 @@ export class Combat {
     const radius = (D.chrono ? 1.3 : 1) * (tiers.flow >= 2 ? 20 : 15);
     const origin = new THREE.Vector3(p.x, p.y + 1, p.z);
     this.fx.castSurge(p.x, p.y, p.z, radius);
+    g.world.purify(p.x, p.z, radius * 0.35);
     g.particles.ring(origin, new THREE.Color(0xb084ff).multiplyScalar(3), 70, 28, 0.8, 0.9);
     g.particles.ring(origin, new THREE.Color(0x5cffc1).multiplyScalar(3), 50, 18, 0.7, 0.9);
     g.audio.sfx('surge');

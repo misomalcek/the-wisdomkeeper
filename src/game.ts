@@ -39,6 +39,7 @@ import { LAYER } from './physics/physics';
 import { StoryDeck, addPunch, buildStorycard, lastPunchOf, mergeLibrary, runFromCard, type Storycard } from './systems/storycards';
 import { StorycardsPanel } from './ui/storycardsPanel';
 import { setSurfaceDetail } from './engine/proctex';
+import { strongestDrift } from './world/genome';
 import { perf } from './engine/perf';
 import { flagState } from './engine/flags';
 
@@ -596,7 +597,12 @@ export class Game {
       this.boss = this.enemies.find((e) => e.kind === 'boss') ?? null;
     }
 
-    if (lastPunchOf(this.run, 'stratum')?.stratum !== index) this.punch('stratum', `Entered ${this.def.name} — ${this.def.act}`);
+    // the World Genome: the strongest way this run's choices reshaped the region is told once and punched on the card
+    const drift = this.def.boss ? null : strongestDrift(this.world.drifts);
+    if (lastPunchOf(this.run, 'stratum')?.stratum !== index) {
+      this.punch('stratum', `Entered ${this.def.name} — ${this.def.act}`);
+      if (drift) this.punch('land', `${this.def.name} grew from ${drift.why}`);
+    }
     this.mode = 'play';
     this.ui.hideAll();
     this.ui.setHudVisible(true);
@@ -606,6 +612,7 @@ export class Game {
       if (this.run.stratumIndex !== index) return;
       this.ui.say(this.def.intro);
       if (this.pendingNote && index > 0 && !this.def.boss && this.def.id !== 'return') this.ui.say(`The Mycelial Mind noticed — ${this.pendingNote}`);
+      else if (drift) this.ui.say(`The land remembers — ${drift.why}.`);
       this.pendingNote = '';
     }, 1800);
     this.saveRun();
@@ -727,6 +734,11 @@ export class Game {
     this.gfx.camera.updateMatrixWorld();
     this.gfx.followShadow(this.player.x, this.player.y, this.player.z);
     updateOcclusion(this.gfx.renderer, this.gfx.camera, this.tmp.set(this.player.x, this.player.y + 1, this.player.z));
+    if (this.debugView) {
+      const v = this.debugView;
+      this.gfx.camera.position.set(v[0], v[1], v[2]);
+      this.gfx.camera.lookAt(v[3], v[4], v[5]);
+    }
     if (!this.debugNoRender) this.gfx.render();
     this.input.endFrame();
     perf.end();
@@ -858,6 +870,9 @@ export class Game {
     }
     this.time += dt;
     this.world.update(dt, this.time, this.gfx.camera.position, this.gfx.pointScale, this.player.group.position);
+    // riding a purification wave restores a trickle of Resonance (the living field's small gameplay echo)
+    const lv = this.world.livingAt(this.player.x, this.player.z);
+    if (lv.u > 0.5) this.player.res = Math.min(this.derived.maxRes, this.player.res + dt * 3);
     this.particles.update(dt);
     this.fadeCamps(dt);
   }
@@ -1140,6 +1155,7 @@ export class Game {
     if (!c || c.cleared) return;
     if (c.enemies.every((o) => o.dead)) {
       c.cleared = true;
+      this.world.purify(c.spec.x, c.spec.z, 7);
       this.gainXp(c.spec.kind === 'node' ? 90 : 60);
       this.audio.sfx('ready');
       this.audio.sfx('plant');
@@ -1957,6 +1973,7 @@ export class Game {
     this.dropCrystals(py.pos.x, py.pos.z, 5);
     // the purge wave stuns every Fiend and Drone in range (blueprint: pylon purge stun)
     purgeStun(this, py.pos.x, py.pos.z, 30);
+    this.world.purify(py.pos.x, py.pos.z, 9);
     this.director.stimulate(py.pos.x, py.pos.z, this.world.radius, 2);
     p.hp = this.derived.maxHp;
     p.res = this.derived.maxRes;
@@ -2436,6 +2453,8 @@ export class Game {
   }
   /** Benchmarks: skip rendering so frame times measure the main thread alone (software GL would swamp them). */
   debugNoRender = false;
+  /** QA shots: a fixed camera (eye xyz, target xyz) that overrides the follow camera. */
+  debugView: number[] | null = null;
   /** Profiler and P1 feature-flag state for the benchmark scripts. */
   get debugPerf() {
     return perf;

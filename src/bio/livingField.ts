@@ -86,18 +86,36 @@ export class LivingField {
   follow(x: number, z: number) {
     const cx = Math.floor(x / this.cell);
     const cz = Math.floor(z / this.cell);
-    if (cx === this.cx && cz === this.cz && this.slotX[0] !== -0x7fffffff) return;
-    this.cx = cx;
-    this.cz = cz;
+    const fresh = this.slotX[0] === -0x7fffffff;
+    if (cx === this.cx && cz === this.cz && !fresh) return;
     const S = this.S;
     const h = S >> 1;
-    for (let iz = cz - h; iz < cz - h + S; iz++) {
-      for (let ix = cx - h; ix < cx - h + S; ix++) {
+    const dx = cx - this.cx;
+    const dz = cz - this.cz;
+    this.cx = cx;
+    this.cz = cz;
+    const x0 = cx - h;
+    const z0 = cz - h;
+    if (fresh || Math.abs(dx) >= S || Math.abs(dz) >= S) {
+      this.claim(x0, x0 + S, z0, z0 + S);
+      return;
+    }
+    // only the columns and rows that entered the window change hands
+    if (dx > 0) this.claim(x0 + S - dx, x0 + S, z0, z0 + S);
+    else if (dx < 0) this.claim(x0, x0 - dx, z0, z0 + S);
+    if (dz > 0) this.claim(x0, x0 + S, z0 + S - dz, z0 + S);
+    else if (dz < 0) this.claim(x0, x0 + S, z0, z0 - dz);
+  }
+
+  /** Give the slots of world cells [ix0, ix1) × [iz0, iz1) to those cells (skipping slots that already hold them). */
+  private claim(ix0: number, ix1: number, iz0: number, iz1: number) {
+    for (let iz = iz0; iz < iz1; iz++) {
+      for (let ix = ix0; ix < ix1; ix++) {
         const k = this.slot(ix, iz);
         if (this.slotX[k] === ix && this.slotZ[k] === iz) continue;
         this.slotX[k] = ix;
         this.slotZ[k] = iz;
-        const g = Math.min(1, this.support((ix + 0.5) * this.cell, (iz + 0.5) * this.cell) * 1.3);
+        const g = this.supportAt(ix, iz);
         this.ground[k] = g;
         this.C[k] = g * 0.85;
         this.G[k] = 0;
@@ -105,6 +123,24 @@ export class LivingField {
       }
     }
   }
+
+  /**
+   * Ground support of a cell, sampled on a 2-cell lattice and cached: Blight varies over tens of metres, and the
+   * support function walks the whole ground field (several µs), so a window row costs a quarter of the samples.
+   */
+  private supportAt(ix: number, iz: number) {
+    const sx = ix >> 1;
+    const sz = iz >> 1;
+    const key = (sx + 0x8000) * 0x10000 + (sz + 0x8000);
+    let g = this.coarse.get(key);
+    if (g === undefined) {
+      g = Math.min(1, this.support((sx * 2 + 1) * this.cell, (sz * 2 + 1) * this.cell) * 1.3);
+      if (this.coarse.size > 40000) this.coarse.clear();
+      this.coarse.set(key, g);
+    }
+    return g;
+  }
+  private coarse = new Map<number, number>();
 
   /** A purification event: stimulates a disk that grows into a travelling ring. */
   pulse(x: number, z: number, radius: number) {

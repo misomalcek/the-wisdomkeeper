@@ -166,6 +166,26 @@ export class OrbitIsles {
     return isle;
   }
 
+  /** The nearest isle around (x, z) among those already baked (never bakes: safe to call every frame). */
+  nearestBaked(x: number, z: number): Isle | null {
+    const ci = Math.floor(x / CELL);
+    const cj = Math.floor(z / CELL);
+    let best: Isle | null = null;
+    let bd = Infinity;
+    for (let j = cj - 1; j <= cj + 1; j++) {
+      for (let i = ci - 1; i <= ci + 1; i++) {
+        const isle = this.cells.get((i + 32768) * 65536 + (j + 32768));
+        if (!isle) continue;
+        const d = Math.hypot(x - isle.x, z - isle.z) - isle.R;
+        if (d < bd) {
+          bd = d;
+          best = isle;
+        }
+      }
+    }
+    return best;
+  }
+
   private make(i: number, j: number): Isle | null {
     const s = this.seed >>> 0;
     if (h2(i, j, s ^ 0x15e1) > this.prob) return null;
@@ -176,7 +196,8 @@ export class OrbitIsles {
     const z = (j + 0.5) * CELL + (h2(i, j, s ^ 0x0b17) - 0.5) * 2 * slack;
     if (Math.hypot(x, z) - reach < CORE_CLEAR) return null;
     const rot = h2(i, j, s ^ 0x9071) * Math.PI * 2;
-    const c = juliaConstant({ juliaA: this.genome.juliaA, juliaB: clamp(this.genome.juliaB + (h2(i, j, s ^ 0xbeef) - 0.5) * 0.35, 0, 1) });
+    // each isle a sibling of the region's set: its constant wanders a little around the genome's
+    const c = juliaConstant({ juliaA: this.genome.juliaA + (h2(i, j, s ^ 0xa11e) - 0.5) * 0.08, juliaB: clamp(this.genome.juliaB + (h2(i, j, s ^ 0xbeef) - 0.5) * 0.35, 0, 1) });
     // bake in z-units, then convert to metres
     const sd = bakeJuliaSDF(c[0], c[1]);
     const k = R / 1.6;

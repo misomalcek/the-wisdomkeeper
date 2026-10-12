@@ -151,7 +151,7 @@ describe('Orbit Isles', () => {
     const f = { x: 0, y: 0 };
     let found = false;
     for (let a = 0; a < 6.28 && !found; a += 0.05) {
-      for (let r = 0; r < isle.R; r += 4) {
+      for (let r = isle.R; r > 0; r -= 4) { // outside in: the first lake point lies near the shore
         const x = isle.x + Math.cos(a) * r, z = isle.z + Math.sin(a) * r;
         if (s.riverAt(x, z) > 0.8) {
           s.flowAt(x, z, f);
@@ -293,5 +293,50 @@ describe('living field', () => {
     const ms = (performance.now() - t0) / 40;
     console.log(`living field tick ${ms.toFixed(3)} ms`);
     expect(ms).toBeLessThan(3);
+  });
+});
+
+describe('genome colour, glyphs and narration', () => {
+  it('biome tints are luminance-neutral and differ by biome; off is neutral', async () => {
+    const { biomeStyle, nullColour } = await import('../src/world/biomeStyle');
+    const g = baseGenome(31, 'river');
+    const s = biomeStyle(g, true);
+    expect(s.tints).toHaveLength(12);
+    for (let b = 0; b < 4; b++) {
+      const [r, gg, bb] = s.tints.slice(b * 3, b * 3 + 3);
+      expect(0.2126 * r + 0.7152 * gg + 0.0722 * bb).toBeCloseTo(1, 3);
+    }
+    expect(s.tints.slice(0, 3)).not.toEqual(s.tints.slice(3, 6));
+    expect(biomeStyle(g, false).tints.every((v) => v === 1)).toBe(true);
+    const n = nullColour(g);
+    expect(n[0]).toBeGreaterThan(n[1]); // the Null stays magenta-red
+  });
+
+  it('the region Julia glyph has a boundary line and an interior', async () => {
+    const { juliaGlyph } = await import('../src/engine/proctexGen');
+    const c = juliaConstant(baseGenome(5, 'seedbed'));
+    const px = juliaGlyph(c[0], c[1], 64);
+    let line = 0, inside = 0;
+    for (let k = 0; k < 64 * 64; k++) {
+      if (px[k * 4 + 1] > 0) inside++;
+      else if (px[k * 4] > 128) line++;
+    }
+    expect(inside).toBeGreaterThan(50);
+    expect(line).toBeGreaterThan(20);
+  });
+
+  it('narrates the strongest drift', async () => {
+    const { strongestDrift } = await import('../src/world/genome');
+    expect(strongestDrift([])).toBeNull();
+    const ds = lineageDrifts({ remembrances: ['embrace', 'embrace', 'purify'], history: [], latent: [0, 0, 0, 0], cycle: 1, tiers: { root: 0, echo: 0, flow: 0 } } as never);
+    expect(strongestDrift(ds)!.why).toMatch(/embraced/);
+  });
+
+  it('nearestBaked never bakes', () => {
+    const f = new WildField(9, 'seedbed', baseGenome(9, 'seedbed'), FULL);
+    const isle = findIsle(f);
+    const fresh = new OrbitIsles(9 ^ 0x0b17, baseGenome(9, 'seedbed'));
+    expect(fresh.nearestBaked(isle.x, isle.z)).toBeNull();
+    expect(f.isles!.nearestBaked(isle.x, isle.z)).toBe(isle);
   });
 });

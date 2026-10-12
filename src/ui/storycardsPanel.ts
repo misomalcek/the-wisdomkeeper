@@ -27,7 +27,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 }
 
 const PUNCH_GLYPH: Record<Punch['kind'], string> = {
-  cycle: '✺', stratum: '◇', camp: '✕', pylon: '⟟', remembrance: '❖', contact: '⌁', choice: '❦', mission: '✓', boss: '☗', level: '▲', death: '✝', ending: '∞', note: '·',
+  cycle: '✺', stratum: '◇', camp: '✕', pylon: '⟟', remembrance: '❖', contact: '⌁', choice: '❦', mission: '✓', boss: '☗', level: '▲', death: '✝', ending: '∞', note: '·', land: '❋',
 };
 
 function when(iso: string | undefined) {

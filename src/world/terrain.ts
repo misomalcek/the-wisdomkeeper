@@ -3,12 +3,15 @@ import { MeshStandardNodeMaterial } from 'three/webgpu';
 import {
   Fn, Loop, uniform, uniformArray, attribute, positionWorld, positionView, normalWorld, float, vec2, vec3, color, mix, sin,
   fract, abs, max, min, clamp, fwidth, exp, dot, distance, atan, smoothstep as sstep, pow, texture, floor, cos, step,
+  If, Break, sqrt, log,
 } from 'three/tsl';
 import { worldTime, fbm2, conduction, proceduralBump, hash21, type N } from '../engine/materials';
 import { fractalTexture, surfaceDetail, surfaces } from '../engine/proctex';
 import { GroundShape, type ShapeOpts } from './gen/shape';
 import type { WildField } from './gen/field';
 import type { Palette } from '../story/strata';
+import { flag, flagTier } from '../engine/flags';
+import type { Isle } from './gen/orbit';
 
 export interface TerrainOpts extends ShapeOpts {
   palette: Palette;
@@ -38,6 +41,10 @@ export class Terrain {
   }
   private lightArr: THREE.Vector4[] = Array.from({ length: MAX_LIGHTS }, () => new THREE.Vector4(0, -9999, 0, 0));
   private corruptArr: THREE.Vector4[] = Array.from({ length: MAX_CORRUPT }, () => new THREE.Vector4(0, 0, 1, 0));
+  /** Living-field texture (R corruption, G purification glow), written by the world's LivingField; null when off. */
+  readonly living: { tex: THREE.DataTexture; data: Uint8Array; size: number; cell: number } | null = null;
+  /** The Orbit Isle whose full-resolution coastline the shader draws (the nearest one to the hero). */
+  private coastIsle: Isle | null = null;
 
   constructor(o: TerrainOpts) {
     this.radius = o.radius;
@@ -55,7 +62,22 @@ export class Terrain {
       radius: uniform(o.radius),
       stream: uniform(o.grid > 0.8 ? 0.35 : 1),
       nullCol: uniform(new THREE.Color(0xff0055)),
+      livCentre: uniform(new THREE.Vector2()),
+      // x, z, k = 1.6/R (0: no isle), mirror; cos, sin of rotation, c
+      isleA: uniform(new THREE.Vector4(0, 0, 0, 1)),
+      isleB: uniform(new THREE.Vector4(1, 0, 0, 0)),
     };
+    if (flag('living')) {
+      const size = flagTier() === 'low' ? 96 : 128;
+      const data = new Uint8Array(size * size * 2);
+      const tex = new THREE.DataTexture(data, size, size, THREE.RGFormat, THREE.UnsignedByteType);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.magFilter = tex.minFilter = THREE.LinearFilter;
+      tex.generateMipmaps = false;
+      tex.colorSpace = THREE.NoColorSpace;
+      tex.needsUpdate = true;
+      this.living = { tex, data, size, cell: 1.5 };
+    }
     this.material = this.buildMaterial();
   }
 
@@ -70,6 +92,8 @@ export class Terrain {
     const corrupt = uniformArray(this.corruptArr, 'vec4');
     const riverAttr = attribute('aRiver', 'float');
     const blightAttr: N = attribute('aBlight', 'float');
+    const tintAttr: N = attribute('aTint', 'vec3');
+    const isleAttr: N = attribute('aIsle', 'float');
     const w = positionWorld;
     const dist = positionView.length();
     const t = worldTime;
@@ -101,14 +125,27 @@ export class Terrain {
       return acc;
     });
     const glow: N = glowF();
-    const cor: N = max(corF(), blightAttr);
+    // the living field: corruption fronts creeping out of the Blight and purification waves, on a window around the hero
+    let livC: N = float(0);
+    let livU: N = float(0);
+    if (this.living) {
+      const L = this.living;
+      const lv: N = texture(L.tex, w.xz.div(L.size * L.cell));
+      const off: N = abs(w.xz.sub(u.livCentre));
+      const half = L.size * L.cell * 0.5;
+      const fade: N = float(1).sub(sstep(half * 0.7, half * 0.92, max(off.x, off.y)));
+      livC = lv.r.mul(fade);
+      livU = lv.g.mul(fade);
+    }
+    const cor: N = max(max(corF(), blightAttr), livC);
 
     // ---- albedo: height banding, slope rock, eye-level mottling, Null stain
     const h = sstep(-2, 7, w.y);
     const slope = sstep(0.92, 0.72, normalWorld.y);
     const mott = sin(w.x.mul(0.37).add(sin(w.z.mul(0.23)).mul(2))).mul(sin(w.z.mul(0.31).add(sin(w.x.mul(0.19)).mul(2))));
     const grain = fbm2(w.xz.mul(0.45));
-    let albedo: N = mix(u.base, u.high, h);
+    // biome tint from the World Genome (OKLab-blended per vertex by the chunk builder; 1 when off)
+    let albedo: N = mix(u.base, u.high, h).mul(tintAttr);
     albedo = albedo.mul(mott.mul(mott).mul(0.35).add(0.8).add(grain.sub(0.5).mul(0.35)));
 
     // ---- procedural ground (engine/proctex): cracked soil, pebbles and moss at two scales, so it never tiles
@@ -150,7 +187,9 @@ export class Terrain {
     const lp: N = vec2(dl.x.mul(cos(ang)).sub(dl.y.mul(sin(ang))), dl.x.mul(sin(ang)).add(dl.y.mul(cos(ang)))).div(rad.mul(2)).add(0.5);
     const fg: N = texture(fractalTexture(), lp);
     const glyphOn: N = step(hc, 0.21).mul(float(1).sub(sstep(0.42, 0.5, dl.length().div(rad.mul(2)))));
-    const glyphLine: N = pow(mix(fg.r, fg.g, step(0.5, hash21(cell.add(5.9)))), float(2.5));
+    // half the glyphs are the Mandelbrot set, half a Julia set: the region's own (its genome's c) when glyphs are on
+    const julia: N = flag('glyphs') ? texture(surfaces.glyph, lp).r : fg.g;
+    const glyphLine: N = pow(mix(fg.r, julia, step(0.5, hash21(cell.add(5.9)))), float(2.5));
     const ripple: N = sin(dl.length().mul(1.4).sub(t.mul(1.8))).mul(0.5).add(0.5);
     emit = emit.add(mix(u.accent, u.accent2, ripple).mul(glyphLine.mul(ripple.mul(0.6).add(0.4)).mul(glyphOn).mul(0.6)).mul(float(1).sub(sstep(60, 140, dist))));
 
@@ -172,14 +211,23 @@ export class Terrain {
     const veins = pow(float(1).sub(vv), float(16)).mul(sstep(0.42, 0.62, fbm2(w.xz.mul(0.11).add(t.mul(0.02))))); // broken into creeping patches
     const cpulse = sin(t.mul(1.6).add(w.x.mul(0.1))).mul(0.4).add(0.6);
     emit = mix(emit, emit.mul(0.25), cor).add(u.nullCol.mul(veins.mul(0.5).mul(cpulse).add(0.02)).mul(cor));
+    // purification waves: rings of living light running over the ground, burning the corruption they cross
+    if (this.living) emit = emit.add(mix(u.accent, vec3(0.55, 1, 0.85), 0.5).mul(livU.mul(livU).mul(1.3)));
 
     // river of light
     const flow = sin(w.z.mul(0.7).sub(t.mul(2.2)).add(sin(w.x.mul(0.6)).mul(1.5))).mul(0.5).add(0.5);
     const flow2 = sin(w.z.mul(1.9).sub(t.mul(3.4)).add(w.x.mul(0.8))).mul(0.5).add(0.5);
     const rk = sstep(0, 0.7, riverAttr);
-    const rc = u.river.mul(flow.mul(flow2).mul(0.9).add(0.55)).add(u.accent2.mul(0.12).mul(glow));
+    // lakes of light inside Orbit Isles ripple along iso-lines of the Julia boundary, drifting toward the heart
+    const sd: N = isleAttr;
+    const lakeM: N = sstep(-3, -12, sd);
+    const iso: N = sin(sd.mul(0.42).add(t.mul(1.3))).mul(0.5).add(0.5);
+    const rc = u.river.mul(flow.mul(flow2).mul(0.9).add(0.55)).mul(mix(float(1), iso.mul(1.1).add(0.75), lakeM)).add(u.accent2.mul(lakeM.mul(iso).mul(0.18).add(glow.mul(0.12))));
     emit = mix(emit, rc, rk);
     albedo = mix(albedo, u.river.mul(0.25), rk);
+    // the shore: a soft band of light where the rim meets the lake
+    emit = emit.add(u.accent2.mul(exp(sd.mul(sd).mul(-0.015)).mul(0.22)));
+    if (flag('coast')) emit = emit.add(mix(u.river, u.accent2, 0.5).mul(this.coastNode(sd)));
 
     // arena rim: a thin bright seam where the playable bowl ends
     const r = w.xz.length();
@@ -192,6 +240,79 @@ export class Terrain {
     m.roughnessNode = mix(float(0.86).sub(grain.mul(0.12)), float(0.4), max(cor, rk.mul(0.9)));
     m.metalnessNode = mix(float(0.05), float(0.55), cor);
     return m;
+  }
+
+  /**
+   * The full-resolution Julia coastline of the nearest Orbit Isle (the oscillating "v" over the smooth "u" the height
+   * field uses): fragments within ~24 m of the boundary iterate z → z² + c and draw the distance estimate as light,
+   * a crisp line on the true fractal edge with filaments pulsing outward from it.
+   */
+  private coastNode(sd: N): N {
+    const u = this.u;
+    const w = positionWorld;
+    const px: N = max(fwidth(w.x), float(0.02)); // pixel footprint (m), taken outside the branch
+    return Fn(() => {
+      const out = float(0).toVar();
+      If(abs(sd).lessThan(24).and(u.isleA.z.greaterThan(0)), () => {
+        const k: N = u.isleA.z;
+        const d: N = w.xz.sub(u.isleA.xy);
+        const zx = d.x.mul(u.isleB.x).sub(d.y.mul(u.isleB.y)).mul(k).toVar();
+        const zy = d.x.mul(u.isleB.y).add(d.y.mul(u.isleB.x)).mul(k).mul(u.isleA.w).toVar();
+        const dx = float(1).toVar();
+        const dy = float(0).toVar();
+        const m2 = zx.mul(zx).add(zy.mul(zy)).toVar();
+        Loop(24, () => {
+          If(m2.greaterThan(1e4), () => {
+            Break();
+          });
+          const ndx = zx.mul(dx).sub(zy.mul(dy)).mul(2).toVar();
+          dy.assign(zx.mul(dy).add(zy.mul(dx)).mul(2));
+          dx.assign(ndx);
+          const nx = zx.mul(zx).sub(zy.mul(zy)).add(u.isleB.z).toVar();
+          zy.assign(zx.mul(zy).mul(2).add(u.isleB.w));
+          zx.assign(nx);
+          m2.assign(zx.mul(zx).add(zy.mul(zy)));
+        });
+        If(m2.greaterThan(1e4), () => {
+          const m: N = sqrt(m2);
+          const de: N = m.mul(log(m)).mul(0.5).div(max(sqrt(dx.mul(dx).add(dy.mul(dy))), 1e-6)).div(k); // metres
+          const line: N = float(1).sub(sstep(0, px.mul(1.5).add(0.25), de));
+          const pulse: N = pow(sin(de.mul(2.2).sub(worldTime.mul(2.4))).mul(0.5).add(0.5), float(6));
+          out.assign(line.mul(1.1).add(pulse.mul(exp(de.mul(-0.22))).mul(0.6)));
+        });
+      });
+      return out;
+    })();
+  }
+
+  /** Point the coastline shader at an isle (null: none near). */
+  setCoastIsle(isle: Isle | null) {
+    if (isle === this.coastIsle) return;
+    this.coastIsle = isle;
+    const u = this.u;
+    if (!isle) {
+      (u.isleA.value as THREE.Vector4).set(0, 0, 0, 1);
+      return;
+    }
+    (u.isleA.value as THREE.Vector4).set(isle.x, isle.z, 1.6 / isle.R, isle.flip);
+    (u.isleB.value as THREE.Vector4).set(isle.cr, isle.sr, isle.c[0], isle.c[1]);
+  }
+
+  /** The Null's glow colour (linear RGB), from the World Genome. */
+  setNullColour(rgb: [number, number, number]) {
+    (this.u.nullCol.value as THREE.Color).setRGB(rgb[0], rgb[1], rgb[2], THREE.LinearSRGBColorSpace);
+  }
+
+  /** Live Null-camp corruption slots (x, z, radius, strength). */
+  get corruptions(): readonly THREE.Vector4[] {
+    return this.corruptArr;
+  }
+
+  /** Upload the living field's current state (call after it steps). */
+  setLiving(cx: number, cz: number) {
+    if (!this.living) return;
+    (this.u.livCentre.value as THREE.Vector2).set(cx, cz);
+    this.living.tex.needsUpdate = true;
   }
 
   /** 0 outside the river (or a lake of light), 1 in the channel's core. */
