@@ -526,7 +526,7 @@ export function animateBloater(e: Enemy, g: Game, dt: number) {
   e.body.rotation.y += dt * 0.35;
   const swell = e.state === 'wind' ? 1 - e.st / 1.1 : 0;
   const breath = 1 + Math.sin(g.time * 2.2 + e.id) * 0.04;
-  const s = breath + swell * 0.4 + (swell > 0.6 ? Math.sin(g.time * 40) * 0.03 : 0);
+  const s = (breath + swell * 0.4 + (swell > 0.6 ? Math.sin(g.time * 40) * 0.03 : 0)) * e.bodyScale;
   e.body.scale.set(s, s * (1 - swell * 0.08), s);
   e.body.rotation.z = Math.sin(g.time * 0.7 + e.id) * 0.12;
 }

@@ -30,7 +30,11 @@ The fork never edits this repository's files. It attaches through these points, 
 2. **`Game.hooks`** (`src/systems/hooks.ts`) is an event bus for what happens in play: stratum, transition, tick, spawn,
    kill, hurt, death, respawn, remembrance, pylon, echo, save and story. It also holds `travelGate`, which lets an edition bar
    fast travel to a place. `Game.campStates`, `Game.inTransition` and `Game.storycards` (its `card` and `saveFile`) give access without reaching into private fields.
-3. **`runExtensions.evolution`** in `src/systems/storycards.ts`, with `RunState.evolution`, lets an edition keep
+3. **`Enemy.applyStrain`** (`src/entities/strain.ts`) breeds one enemy into a strain (size, vigor, haste, glow hue). The web
+   game owns the clamp, so an edition can vary the Null without leaving the game's balance.
+4. **`recordMutation`** (`src/world/genome.ts`) records a region's genome mutation on the run, clamped; the land is built
+   from it here too, so a card from either edition grows the same world.
+5. **`runExtensions.evolution`** in `src/systems/storycards.ts`, with `RunState.evolution`, lets an edition keep
    its own block on a storycard. Without a registered validator, the web build drops the block.
 
 ### Rules for changing it
