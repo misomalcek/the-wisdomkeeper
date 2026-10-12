@@ -35,6 +35,11 @@ export interface GroundSample {
   wild: number;
   /** Signed distance to the nearest Orbit Isle boundary (m); 1e4 when none. */
   isleSd: number;
+  /** Landform shading cues (see WildSample). */
+  rock: number;
+  strata: number;
+  sand: number;
+  ero: number;
 }
 
 export class GroundShape {
@@ -48,7 +53,7 @@ export class GroundShape {
   private riverF: number;
   private riverP: number;
   readonly riverW: number;
-  private ws: WildSample = { h: 0, biome: Biome.Meadow, core: 0, blight: 0, lake: 0, isleSd: 1e4 };
+  private ws: WildSample = { h: 0, biome: Biome.Meadow, core: 0, blight: 0, lake: 0, isleSd: 1e4, rock: 0, strata: 0, sand: 0, ero: 0 };
   private lf = { x: 0, y: 0 };
 
   constructor(readonly opts: ShapeOpts) {
@@ -62,7 +67,7 @@ export class GroundShape {
     this.riverF = 0.032;
     this.riverP = (o.seed % 628) / 100;
     this.riverW = 9;
-    this.wild = o.wild ? new WildField(o.seed, o.flavour, o.genome ?? neutralGenome(), o.features ?? NO_FEATURES) : null;
+    this.wild = o.wild ? new WildField(o.seed, o.flavour, o.genome ?? neutralGenome(), o.features ?? NO_FEATURES, o.radius) : null;
   }
 
   private centerX(z: number) {
@@ -124,7 +129,7 @@ export class GroundShape {
   heightAt(x: number, z: number) {
     return this.sample(x, z, this.gs).h;
   }
-  private gs: GroundSample = { h: 0, river: 0, blight: 0, biome: Biome.Meadow, core: 0, wild: 0, isleSd: 1e4 };
+  private gs: GroundSample = { h: 0, river: 0, blight: 0, biome: Biome.Meadow, core: 0, wild: 0, isleSd: 1e4, rock: 0, strata: 0, sand: 0, ero: 0 };
 
   /** Height, river/lake, blight and biome in one pass through the field. */
   sample(x: number, z: number, out: GroundSample): GroundSample {
@@ -136,6 +141,7 @@ export class GroundShape {
     out.core = 0;
     out.wild = 0;
     out.isleSd = 1e4;
+    out.rock = out.strata = out.sand = out.ero = 0;
     if (!this.wild) {
       h += smoothstep(this.radius * 0.94, this.radius * 1.35, r) * (14 + this.radius * 0.3);
     } else {
@@ -152,6 +158,10 @@ export class GroundShape {
         out.biome = w.biome;
         out.core = w.core;
         out.isleSd = w.isleSd;
+        out.rock = w.rock * t;
+        out.strata = w.strata * t;
+        out.sand = w.sand * t;
+        out.ero = w.ero * t;
       }
     }
     const ch = this.channel(x, z);

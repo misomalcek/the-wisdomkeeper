@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { worldTime } from '../engine/materials';
+import { worldTime, fogFar } from '../engine/materials';
 import type { RunState } from '../types';
 import { STRATA, type Palette, type StratumDef } from '../story/strata';
 import { Rng, hashString } from '../util/rng';
@@ -17,6 +17,7 @@ import { DriftField, MushroomGroves, type TetherAnchor } from './traversal';
 import { Props } from './props';
 import { TerrainStreamer } from './chunks';
 import { Wilds } from './wilds';
+import { Landmarks } from './landmarks';
 import { VeilSetPiece, layoutVeil, type VeilLayout } from './veil';
 import { buildSurfaces } from '../engine/proctex';
 import { perf } from '../engine/perf';
@@ -73,6 +74,8 @@ export class World {
   readonly ground: TerrainStreamer;
   /** Procedural flora and mycelium of the infinite Wilds (null in bounded boss arenas). */
   readonly wilds: Wilds | null;
+  /** Fractal landmark formations of the Wilds (null without landforms or outside the Wilds). */
+  readonly landmarks: Landmarks | null;
   readonly flora: Flora;
   readonly mycelium: Mycelium;
   readonly grove: EchoGrove;
@@ -124,7 +127,7 @@ export class World {
       wild: !def.boss,
       flavour: def.flora,
       genome: this.genome,
-      features: { erosion: flag('erosion'), terrace: flag('terrace'), orbit: flag('orbit') },
+      features: { erosion: flag('erosion'), terrace: flag('terrace'), orbit: flag('orbit'), landforms: flag('landforms') },
     });
     if (flag('genome')) this.terrain.setNullColour(nullColour(this.genome));
     this.ground = new TerrainStreamer(this.terrain, biomeStyle(this.genome, flag('oklab')));
@@ -134,9 +137,13 @@ export class World {
       this.living.sources = this.terrain.corruptions.map(() => ({ x: 0, z: 0, r: 1, s: 0 }));
     }
     this.group.add(this.ground.mesh);
+    if (this.ground.horizon) this.group.add(this.ground.horizon);
+    fogFar.value = this.ground.horizon ? 1 : 0;
     this.physics = new Physics((x, z) => this.terrain.heightAt(x, z));
     if (this.ground.threaded) this.physics.heightSource = (i, j, size, res) => this.ground.physicsHeights(i, j, size, res);
     this.wilds = this.terrain.wild ? new Wilds(this.terrain, this.physics, this.palette, baseSeed ^ 0x77, this.tetherAnchors) : null;
+    this.landmarks = this.terrain.wild && flag('landforms') ? new Landmarks(this.terrain, this.physics, this.palette, baseSeed ^ 0x1a9d) : null;
+    if (this.landmarks) this.group.add(this.landmarks.group);
     if (this.wilds) {
       this.group.add(this.wilds.group);
       if (this.ground.threaded) this.wilds.surface = (x, z) => this.ground.surfaceAt(x, z);
@@ -355,6 +362,8 @@ export class World {
     this.group.add(this.sky.mesh);
     this.spires = new Spires(R, this.palette, def.id === 'mirror' ? 36 : 54);
     this.group.add(this.spires.mesh);
+    // with the far land drawn, real ranges make the skyline; the stand-in spires go
+    this.spires.mesh.visible = !this.ground.horizon;
     this.motes = new Motes(R, def.id === 'mirror' ? 260 : 460, this.palette, def.id !== 'mirror');
     this.group.add(this.motes.object);
   }
@@ -415,6 +424,7 @@ export class World {
     perf.stop('ground');
     perf.start('wilds');
     this.wilds?.update(x, z, 1);
+    this.landmarks?.update(x, z);
     perf.stop('wilds');
     perf.start('physics');
     this.physics.streamTerrain(x, z);
@@ -460,6 +470,7 @@ export class World {
     this.ground.prime(x, z);
     this.living?.follow(x, z);
     this.wilds?.prime(x, z);
+    this.landmarks?.update(x, z);
     this.physics.prime(x, z);
   }
 
@@ -543,6 +554,7 @@ export class World {
 
   dispose() {
     this.wilds?.dispose();
+    this.landmarks?.dispose();
     this.ground.dispose();
     this.terrain.dispose();
     this.flora.dispose();

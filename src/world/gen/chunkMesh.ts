@@ -24,17 +24,19 @@ export interface ChunkArrays {
   bli: Float32Array;
   tint: Float32Array;
   isle: Float32Array;
+  /** Landform shading cues per vertex: rock, strata, sand, erosion (see WildSample). */
+  form: Float32Array;
   idx: Uint16Array;
   /** Height grid (n+1)² of the chunk itself (row-major, z rows), reused for physics heightfields. */
   heights: Float32Array;
 }
 
-const _s: GroundSample = { h: 0, river: 0, blight: 0, biome: Biome.Meadow, core: 0, wild: 0, isleSd: 1e4 };
+const _s: GroundSample = { h: 0, river: 0, blight: 0, biome: Biome.Meadow, core: 0, wild: 0, isleSd: 1e4, rock: 0, strata: 0, sand: 0, ero: 0 };
 const _lab: RGB = [0, 0, 0];
 const _rgb: RGB = [0, 0, 0];
 
 /** Biome tint in OKLab: from neutral (1,1,1) toward the biome's tint by how deep into the cell and the Wilds. */
-function tintAt(style: ChunkStyle, biome: Biome, k: number, out: Float32Array, o: number) {
+export function tintAt(style: ChunkStyle, biome: Biome, k: number, out: Float32Array, o: number) {
   const t = style.tints;
   if (k <= 0.001) {
     out[o] = out[o + 1] = out[o + 2] = 1;
@@ -62,6 +64,7 @@ export function buildChunkArrays(shape: GroundShape, cx: number, cz: number, n: 
   const bli = new Float32Array(vCount);
   const tint = new Float32Array(vCount * 3);
   const isle = new Float32Array(vCount);
+  const form = new Float32Array(vCount * 4);
   const heights = new Float32Array(vGrid);
   for (let j = 0; j < W; j++) {
     for (let i = 0; i < W; i++) {
@@ -80,6 +83,10 @@ export function buildChunkArrays(shape: GroundShape, cx: number, cz: number, n: 
       riv[v] = s.river;
       bli[v] = s.blight;
       isle[v] = Math.max(-60, Math.min(60, s.isleSd));
+      form[v * 4] = s.rock;
+      form[v * 4 + 1] = s.strata;
+      form[v * 4 + 2] = s.sand;
+      form[v * 4 + 3] = s.ero;
       tintAt(style, s.biome, s.core * s.wild, tint, v * 3);
     }
   }
@@ -121,6 +128,7 @@ export function buildChunkArrays(shape: GroundShape, cx: number, cz: number, n: 
       riv[v] = riv[src];
       bli[v] = bli[src];
       isle[v] = isle[src];
+      for (let c = 0; c < 4; c++) form[v * 4 + c] = form[src * 4 + c];
       v++;
     }
   }
@@ -147,8 +155,8 @@ export function buildChunkArrays(shape: GroundShape, cx: number, cz: number, n: 
       for (const q of [a, b, c, b, d, c, a, c, b, b, c, d]) idx[k++] = q;
     }
   });
-  return { pos, nor, riv, bli, tint, isle, idx, heights };
+  return { pos, nor, riv, bli, tint, isle, form, idx, heights };
 }
 
 /** Buffers to transfer (zero-copy) when a worker posts a chunk back. */
-export const chunkTransfer = (a: ChunkArrays): ArrayBuffer[] => [a.pos, a.nor, a.riv, a.bli, a.tint, a.isle, a.idx, a.heights].map((t) => t.buffer as ArrayBuffer);
+export const chunkTransfer = (a: ChunkArrays): ArrayBuffer[] => [a.pos, a.nor, a.riv, a.bli, a.tint, a.isle, a.form, a.idx, a.heights].map((t) => t.buffer as ArrayBuffer);

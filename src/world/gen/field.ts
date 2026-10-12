@@ -2,14 +2,17 @@ import { makeNoise2D, makeNoise2DD, type Noise2D, type Noise2DD } from '../../ut
 import { smoothstep, clamp } from '../../util/math';
 import { neutralGenome, type Genome } from '../genome';
 import { OrbitIsles, isleLake, isleProfile, type IsleSample } from './orbit';
+import { Form, Landforms, newFormSample } from './landform';
 
 /** Which P1 shape features a field grows (copied from the flags so module workers build the identical land). */
 export interface ShapeFeatures {
   erosion: boolean;
   terrace: boolean;
   orbit: boolean;
+  /** Landform provinces (ranges, mesas, dunes, karst, calderas) beyond the region's near Wilds. */
+  landforms?: boolean;
 }
-export const NO_FEATURES: ShapeFeatures = { erosion: false, terrace: false, orbit: false };
+export const NO_FEATURES: ShapeFeatures = { erosion: false, terrace: false, orbit: false, landforms: false };
 
 const TAU = Math.PI * 2;
 /** Scratch for derivative noise (fields are single-threaded per worker). */
@@ -45,6 +48,11 @@ export interface WildSample {
   lake: number;
   /** Signed distance to the nearest isle's Julia boundary (m), 1e4 when none. */
   isleSd: number;
+  /** Landform cues for shading, each 0..1 (rock: ranges, calderas, karst; strata: mesas; sand: dunes) and ero −1..1. */
+  rock: number;
+  strata: number;
+  sand: number;
+  ero: number;
 }
 
 const hash2 = (x: number, y: number, s: number) => {
@@ -72,6 +80,8 @@ export class WildField {
   /** Biome weights per region flavour: which biomes appear and how often. */
   private table: Biome[];
   readonly isles: OrbitIsles | null;
+  readonly forms: Landforms | null;
+  private fs = newFormSample();
   private iso: IsleSample = { sd: 1e4, mask: 0, isle: null };
 
   constructor(
@@ -79,6 +89,7 @@ export class WildField {
     flavour: 'seedbed' | 'river' | 'canopy' | 'mirror' | 'return',
     readonly genome: Genome = neutralGenome(),
     readonly features: ShapeFeatures = NO_FEATURES,
+    coreR = 120,
   ) {
     this.seed = seed >>> 0;
     this.n1 = makeNoise2D(seed ^ 0xa11ce);
@@ -88,6 +99,7 @@ export class WildField {
     this.d2 = makeNoise2DD(seed ^ 0xb0b);
     this.d4 = makeNoise2DD(seed ^ 0x6e11);
     this.isles = features.orbit ? new OrbitIsles(seed ^ 0x0b17, genome) : null;
+    this.forms = features.landforms ? new Landforms(seed ^ 0x1a4d, flavour, genome, coreR) : null;
     const T: Record<string, Biome[]> = {
       seedbed: [Biome.Meadow, Biome.Meadow, Biome.Forest, Biome.Crystal, Biome.Blight],
       river: [Biome.Meadow, Biome.Forest, Biome.Forest, Biome.Crystal, Biome.Blight],
@@ -233,7 +245,7 @@ export class WildField {
   height(x: number, z: number) {
     return this.sample(x, z, this.scratch).h;
   }
-  private scratch: WildSample = { h: 0, biome: Biome.Meadow, core: 0, blight: 0, lake: 0, isleSd: 1e4 };
+  private scratch: WildSample = { h: 0, biome: Biome.Meadow, core: 0, blight: 0, lake: 0, isleSd: 1e4, rock: 0, strata: 0, sand: 0, ero: 0 };
 
   /** Height, biome and lake in one pass (the chunk builder's hot path). */
   sample(x: number, z: number, out: WildSample): WildSample {
@@ -285,15 +297,30 @@ export class WildField {
         }
       }
     }
+    // landform provinces: the basin keeps the rolling land, every other province replaces it with its own shape
+    let basin = 1;
+    out.rock = out.strata = out.sand = out.ero = 0;
+    if (this.forms) {
+      const fs = this.forms.sample(x, z, this.fs);
+      basin = 1 - fs.amp * (1 - fs.w[Form.Basin]);
+      h = h * (0.25 + 0.75 * basin) + fs.h;
+      const w = fs.w;
+      out.rock = fs.amp * (w[Form.Range] + w[Form.Caldera] + 0.6 * w[Form.Karst]);
+      out.strata = fs.amp * (w[Form.Mesa] + 0.4 * w[Form.Karst]);
+      out.sand = fs.amp * w[Form.Dunes];
+      out.ero = fs.ero;
+    }
     let lake = 0;
     let isleSd = 1e4;
-    if (this.isles) {
+    if (this.isles && basin > 0.02) {
       const iso = this.isles.sample(x, z, this.iso);
       if (iso.mask > 0) {
+        // isles live in basins: they fade out where another landform takes over
+        const mask = iso.mask * smoothstep(0.02, 0.6, basin);
         isleSd = iso.sd;
-        lake = isleLake(iso.sd) * iso.mask;
+        lake = isleLake(iso.sd) * mask;
         // lakes are flat-ish: the rolling land flattens toward the basin floor, then the rim profile adds on top
-        h = h * (1 - 0.75 * lake) + iso.mask * isleProfile(iso.sd, 3 + 11 * g.ridge, 4);
+        h = h * (1 - 0.75 * lake) + mask * isleProfile(iso.sd, 3 + 11 * g.ridge, 4);
       }
     }
     out.h = h;
@@ -309,7 +336,16 @@ export class WildField {
   lakeAt(x: number, z: number) {
     if (!this.isles) return 0;
     const iso = this.isles.sample(x, z, this.iso);
-    return iso.mask > 0 ? isleLake(iso.sd) * iso.mask : 0;
+    return iso.mask > 0 ? isleLake(iso.sd) * iso.mask * this.basinAt(x, z) : 0;
+  }
+
+  /** 0..1 how much of the point is basin (where Orbit Isles may sit). */
+  private basinAt(x: number, z: number) {
+    if (!this.forms) return 1;
+    const amp = this.forms.amplitude(x, z);
+    if (amp <= 0) return 1;
+    const w = this.forms.weights(x, z, this.fs.w);
+    return smoothstep(0.02, 0.6, 1 - amp * (1 - w[Form.Basin]));
   }
 
   /** Lake of light (0..1) and its circulating current at a point: writes (fx, fz) ∝ strength into `f`. */
@@ -319,7 +355,7 @@ export class WildField {
     if (!this.isles) return 0;
     const iso = this.isles.sample(x, z, this.iso);
     if (iso.mask <= 0 || !iso.isle) return 0;
-    const lake = isleLake(iso.sd) * iso.mask;
+    const lake = isleLake(iso.sd) * iso.mask * this.basinAt(x, z);
     if (lake <= 0) return 0;
     const spin = iso.isle.spin;
     const e = 1.5;

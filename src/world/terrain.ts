@@ -20,6 +20,7 @@ export interface TerrainOpts extends ShapeOpts {
 }
 
 export const MAX_LIGHTS = 10;
+const luminance = (c: THREE.Color) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
 export const MAX_CORRUPT = 8;
 
 /**
@@ -62,6 +63,8 @@ export class Terrain {
       radius: uniform(o.radius),
       stream: uniform(o.grid > 0.8 ? 0.35 : 1),
       nullCol: uniform(new THREE.Color(0xff0055)),
+      // landform colours are authored as daylight earth; scale them to the region's own ground brightness
+      lfL: uniform(Math.min(1, Math.max(0.12, luminance(c(o.palette.groundHigh)) * 4.5))),
       livCentre: uniform(new THREE.Vector2()),
       // x, z, k = 1.6/R (0: no isle), mirror; cos, sin of rotation, c
       isleA: uniform(new THREE.Vector4(0, 0, 0, 1)),
@@ -164,17 +167,21 @@ export class Terrain {
     const strata: N = sin(w.y.mul(2.6).add(gm.b.mul(9))).mul(0.5).add(0.5);
     const rock: N = u.base.mul(0.55).add(vec3(0.035, 0.032, 0.04)).mul(strata.mul(0.45).add(0.7)).mul(st.g.mul(0.5).add(0.6)).mul(float(1).sub(st.b.mul(0.5)));
     albedo = mix(albedo, rock, slope.mul(0.85));
-    albedo = mix(albedo, color(0x0a0003), cor.mul(0.75));
+    // landforms: bare rock and frost on the ranges, banded strata in the canyonlands, rippled sand on the dunes
+    const lf = this.landformLook(albedo, attribute('aForm', 'vec4'), dist);
+    albedo = mix(lf.albedo, color(0x0a0003), cor.mul(0.75));
     if (surfaceDetail > 0) {
-      const relief: N = pebbles.mul(0.5).sub(cracks.mul(0.9)).add(moss.mul(0.2)).add(slope.mul(strata.mul(0.8).sub(st.b.mul(0.6))));
+      const relief: N = pebbles.mul(0.5).sub(cracks.mul(0.9)).add(moss.mul(0.2)).add(slope.mul(strata.mul(0.8).sub(st.b.mul(0.6)))).add(lf.relief);
       m.normalNode = proceduralBump(relief.mul(float(1).sub(sstep(14, 45, dist))), 0.09);
     }
 
     // ---- emission
     const fadeNear = float(1).sub(sstep(26, 70, dist));
-    const lines = gridLine(0.25).mul(0.25).add(gridLine(0.05).mul(0.55)).mul(u.grid).mul(glow.mul(1.5).add(0.3)).mul(fadeNear);
+    // the grid and streams are drawn in plan (xz): keep them off cliffs, where they would smear into vertical streaks
+    const flatM: N = sstep(0.55, 0.8, normalWorld.y);
+    const lines = gridLine(0.25).mul(0.25).add(gridLine(0.05).mul(0.55)).mul(u.grid).mul(glow.mul(1.5).add(0.3)).mul(fadeNear).mul(flatM);
     let emit: N = mix(u.accent, u.accent2, sin(w.x.mul(0.05).add(t.mul(0.2))).mul(0.5).add(0.5)).mul(lines);
-    emit = emit.add(u.accent.mul(glow).mul(0.05));
+    emit = emit.add(u.accent.mul(glow).mul(0.05)).add(lf.emit);
 
     // fractal rings: here and there a Mandelbrot or Julia glyph is written into the soil in light, a pulse
     // running out from its heart; one candidate per 46 m cell, about a fifth of the cells carry one
@@ -196,8 +203,8 @@ export class Terrain {
     // bioluminescent data streams threading the ground, pulsing along their length
     const w1 = w.x.mul(0.11).add(sin(w.z.mul(0.07)).mul(3)).add(sin(w.z.mul(0.19).add(1.3)).mul(1.3));
     const w2 = w.z.mul(0.09).add(sin(w.x.mul(0.08).add(2)).mul(2.6)).add(sin(w.x.mul(0.21)).mul(1.1));
-    const f1 = sstep(0.018, 0, abs(fract(w1).sub(0.5)));
-    const f2 = sstep(0.016, 0, abs(fract(w2).sub(0.5)));
+    const f1 = sstep(0.018, 0, abs(fract(w1).sub(0.5))).mul(flatM);
+    const f2 = sstep(0.016, 0, abs(fract(w2).sub(0.5))).mul(flatM);
     const l1 = f1.mul(sin(w.z.mul(0.9).sub(t.mul(2.2)).add(w1.mul(6))).mul(0.5).add(0.5));
     const l2 = f2.mul(sin(w.x.mul(0.8).add(t.mul(1.9)).add(w2.mul(5))).mul(0.5).add(0.5));
     const nearF = float(1).sub(sstep(35, 95, dist));
@@ -239,6 +246,76 @@ export class Terrain {
     m.emissiveNode = emit;
     m.roughnessNode = mix(float(0.86).sub(grain.mul(0.12)), float(0.4), max(cor, rk.mul(0.9)));
     m.metalnessNode = mix(float(0.05), float(0.55), cor);
+    return m;
+  }
+
+  /**
+   * Shading of the landforms, shared by the near chunks and the far horizon. `f` is the per-vertex form cue
+   * (rock, strata, sand, signed erosion). Ranges: bare stone streaked along the fall line, gully floors darker and
+   * spurs lighter, a pale frost of light on the high crests. Mesas: three-tone sediment bands warped by noise with
+   * thin laminae, pale caprock on the flats. Dunes: sand with wind ripples (near only) and shaded slip faces.
+   */
+  private landformLook(albedo: N, f: N, dist: N): { albedo: N; emit: N; relief: N } {
+    const u = this.u;
+    const w = positionWorld;
+    const ny = normalWorld.y;
+    const L: N = u.lfL;
+    const steep: N = sstep(0.9, 0.55, ny);
+    const big: N = fbm2(w.xz.mul(0.013));
+    const mid: N = fbm2(w.xz.mul(0.07).add(w.y.mul(0.05)));
+    const near: N = float(1).sub(sstep(25, 80, dist));
+    // rock: weathered stone with fall-line streaks; erosion cue darkens gully floors, lights the spurs
+    const streak: N = fbm2(vec2(w.x.add(w.z).mul(0.09), w.y.mul(0.015)));
+    const rockC: N = mix(u.base.mul(0.42), vec3(0.3, 0.29, 0.33).mul(L), 0.6)
+      .mul(big.mul(0.5).add(0.75))
+      .mul(streak.mul(0.55).add(0.72))
+      .mul(clamp(f.w.mul(0.4).add(1), 0.55, 1.4));
+    let a: N = mix(albedo, rockC, clamp(f.x.mul(steep.mul(0.7).add(0.45)), 0, 1));
+    // frost of light on high crests (flat enough to hold it)
+    const frost: N = sstep(85, 160, w.y.add(big.mul(40))).mul(sstep(0.55, 0.85, ny)).mul(sstep(0.05, 0.3, f.x.add(f.y)));
+    a = mix(a, vec3(0.8, 0.84, 0.93).mul(L), frost.mul(0.85));
+    // strata: three sediments in ~9 m beds, laminae inside, warped so the bands wander across cliff faces
+    const sy: N = w.y.add(big.mul(7)).add(mid.mul(2.5));
+    const bed: N = fract(sy.div(9));
+    const lam: N = sin(sy.mul(2.3)).mul(0.5).add(0.5);
+    const bandC: N = mix(mix(vec3(0.5, 0.26, 0.17).mul(L), vec3(0.68, 0.52, 0.36).mul(L), sstep(0.3, 0.37, bed)), vec3(0.34, 0.2, 0.25).mul(L), sstep(0.7, 0.77, bed))
+      .mul(lam.mul(0.22).add(0.82));
+    const strataC: N = mix(mix(vec3(0.72, 0.6, 0.45).mul(L), u.high, 0.15), mix(bandC, u.high, 0.12), clamp(steep.mul(1.3).add(0.1), 0, 1));
+    a = mix(a, strataC, clamp(f.y.mul(1.25), 0, 1));
+    // sand: wind ripples across the dune flanks, slip faces in shade
+    const rp: N = sin(w.x.mul(1.35).add(w.z.mul(1.0)).add(mid.mul(7)).add(big.mul(11)));
+    const sandC: N = mix(vec3(0.74, 0.57, 0.4).mul(L), u.high, 0.15).mul(float(1).sub(steep.mul(0.25))).mul(rp.mul(0.07).mul(near).add(1));
+    const sand: N = clamp(f.z.mul(1.3), 0, 1);
+    a = mix(a, sandC, sand);
+    // gully floors hold damp, darker ground; a thread of light trickles down the deepest ones
+    a = a.mul(float(1).add(min(f.w, 0).mul(0.35)));
+    const trickle: N = sstep(-0.45, -0.85, f.w).mul(sin(w.y.mul(0.8).add(worldTime.mul(2.2))).mul(0.3).add(0.7));
+    const emit: N = u.river.mul(trickle.mul(0.12)).add(u.accent2.mul(frost.mul(0.04)));
+    const relief: N = rp.mul(sand).mul(near).mul(0.35).add(lam.mul(f.y).mul(steep).mul(0.5)).add(streak.mul(f.x).mul(steep).mul(0.4));
+    return { albedo: a, emit, relief };
+  }
+
+  private hzMat: MeshStandardNodeMaterial | null = null;
+  /** Cheap material for the far land: palette and biome tint, slope rock, landform look, rivers and Blight. */
+  get horizonMaterial(): MeshStandardNodeMaterial {
+    if (this.hzMat) return this.hzMat;
+    const u = this.u;
+    const w = positionWorld;
+    const tint: N = attribute('aTint', 'vec3');
+    const misc: N = attribute('aMisc', 'vec2');
+    const dist = positionView.length();
+    let albedo: N = mix(u.base, u.high, sstep(-2, 7, w.y)).mul(tint).mul(fbm2(w.xz.mul(0.004)).mul(0.3).add(0.85));
+    const rock: N = u.base.mul(0.55).add(vec3(0.035, 0.032, 0.04));
+    albedo = mix(albedo, rock, sstep(0.92, 0.72, normalWorld.y).mul(0.85));
+    const lf = this.landformLook(albedo, attribute('aForm', 'vec4'), dist);
+    const rk: N = sstep(0, 0.7, misc.x).mul(0.7);
+    albedo = mix(mix(lf.albedo, u.river.mul(0.25), rk), color(0x0a0003), misc.y.mul(0.75));
+    const m = new MeshStandardNodeMaterial();
+    m.colorNode = albedo;
+    m.emissiveNode = lf.emit.add(u.river.mul(rk).mul(0.8)).add(u.nullCol.mul(misc.y.mul(0.03)));
+    m.roughnessNode = float(0.9);
+    m.metalnessNode = float(0.03);
+    this.hzMat = m;
     return m;
   }
 
@@ -378,5 +455,6 @@ export class Terrain {
 
   dispose() {
     this.material.dispose();
+    this.hzMat?.dispose();
   }
 }

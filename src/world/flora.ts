@@ -8,7 +8,9 @@ import type { Terrain } from './terrain';
 import { TAU } from '../util/math';
 import { occlusionFade } from './occlusion';
 import type { Colliders } from './colliders';
-import { barkMaterial, capMaterial, stemMaterial, stoneMaterial, tuftMaterial } from '../engine/surfaces';
+import { capMaterial, stemMaterial, stoneMaterial, treeMaterial, tuftMaterial } from '../engine/surfaces';
+import { loadProtos, protoGeometry, whenProtos } from './protos';
+import { HOODOO_VARIANTS, TREE_VARIANTS, hoodooKey, treeKey, tuftKey } from './gen/meshgen/index';
 
 export interface Avoid {
   x: number;
@@ -23,8 +25,6 @@ export interface Flora {
 }
 
 const _o = new THREE.Object3D();
-const _q = new THREE.Quaternion();
-const UP = new THREE.Vector3(0, 1, 0);
 
 class Batch {
   readonly mesh: THREE.InstancedMesh;
@@ -50,6 +50,7 @@ class Batch {
   }
   done() {
     this.mesh.count = this.n;
+    this.mesh.visible = this.n > 0 && !!this.mesh.geometry.attributes.position;
     this.mesh.instanceMatrix.needsUpdate = true;
     if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
   }
@@ -68,6 +69,23 @@ export function buildFlora(def: StratumDef, terrain: Terrain, rng: Rng, density:
     const b = new Batch(geo, mat, max);
     batches.push(b);
     group.add(b.mesh);
+    return b;
+  };
+
+  // generated prototypes (gen/meshgen): the batch draws nothing until the shared mesh lands from the worker
+  loadProtos();
+  const mkProto = (key: string, mat: NodeMaterial, max: number) => {
+    track(occlusionFade(mat));
+    const b = new Batch(new THREE.BufferGeometry(), mat, max);
+    b.mesh.visible = false;
+    batches.push(b);
+    group.add(b.mesh);
+    whenProtos(() => {
+      const g = protoGeometry(key);
+      if (!g) return;
+      b.mesh.geometry = g;
+      b.done();
+    });
     return b;
   };
 
@@ -113,59 +131,39 @@ export function buildFlora(def: StratumDef, terrain: Terrain, rng: Rng, density:
     }
   }
 
-  // ---- silicon sprouts: thin wires with lit tips --------------------------------
-  const sproutCount = def.flora === 'mirror' ? 0 : n(def.flora === 'seedbed' ? 160 : def.flora === 'canopy' ? 70 : 90);
+  // ---- coral shrubs: low branching stems with luminous buds (generated, gen/meshgen/trees SHRUB) --------
+  const sproutCount = def.flora === 'mirror' ? 0 : n(def.flora === 'seedbed' ? 110 : def.flora === 'canopy' ? 50 : 65);
   if (sproutCount) {
-    const wire = mk(
-      new THREE.CylinderGeometry(0.025, 0.05, 1, 4).translate(0, 0.5, 0),
-      standard({ color: 0xffffff, metalness: 0.1, roughness: 0.6 }),
-      sproutCount,
-    );
-    const tip = mk(new THREE.OctahedronGeometry(0.16, 0), glowBasic({}, floraGlow), sproutCount);
+    const shrubMat = treeMaterial(0x2a6b62, accentA, accentB, 1.3);
+    const shrubs = Array.from({ length: TREE_VARIANTS }, (_, v) => mkProto(treeKey('shrub', v, 0), shrubMat, sproutCount));
     for (let i = 0; i < sproutCount; i++) {
       const p = spot(2, R * 1.02, 0.3);
       if (!p) continue;
-      const h = rng.range(1.2, 4.2);
-      wire.add(p, 0, new THREE.Vector3(1, h, 1), tmp.setHex(0x6aa5a0));
-      const tp = p.clone();
-      tp.y += h;
-      tmp.copy(new THREE.Color(rng.chance(0.7) ? accentA : accentB)).multiplyScalar(rng.range(1.0, 1.7));
-      tip.add(tp, 0, rng.range(0.7, 1.4), tmp);
+      p.y -= 0.1;
+      rng.pick(shrubs).add(p, rng.range(0, TAU), rng.range(0.6, 1.5), tmp.setScalar(rng.range(0.8, 1.2)));
     }
   }
 
   // ---- monoliths (cyber-stone with a lit seam) ---------------------------------
   const monoCount = def.flora === 'canopy' || def.flora === 'mirror' ? 0 : n(def.flora === 'seedbed' ? 14 : 9);
   if (monoCount) {
-    const body = mk(
-      new THREE.BoxGeometry(1.1, 1, 0.45).translate(0, 0.5, 0),
-      stoneMaterial(accentA, { metalness: 0.2, roughness: 0.55, flatShading: true }),
-      monoCount,
-    );
-    const seam = mk(new THREE.BoxGeometry(0.1, 1, 0.5).translate(0, 0.5, 0), glowBasic({}, floraGlow), monoCount);
+    // eroded standing stones (generated hoodoos), their faces inlaid with lit fractal glyphs
+    const stoneMat = stoneMaterial(accentA, { metalness: 0.15, roughness: 0.6 });
+    const bodies = Array.from({ length: HOODOO_VARIANTS }, (_, v) => mkProto(hoodooKey(v, 0), stoneMat, monoCount));
     for (let i = 0; i < monoCount; i++) {
       const p = spot(6, R * 0.98, 0.1);
       if (!p) continue;
-      const h = rng.range(2.2, 6);
-      const ry = rng.range(0, TAU);
-      const s = new THREE.Vector3(rng.range(0.8, 1.4), h, 1);
-      body.add(p, ry, s, tmp.setHex(0x5b7f8c));
+      const h = rng.range(0.7, 1.7);
+      p.y -= 0.3;
+      rng.pick(bodies).add(p, rng.range(0, TAU), new THREE.Vector3(h * rng.range(0.9, 1.3), h, h * rng.range(0.9, 1.3)), tmp.setHex(0x5b7f8c));
       colliders.add(p.x, p.z, 0.95);
-      const sp = p.clone();
-      sp.y += 0.1;
-      tmp.copy(new THREE.Color(accentA)).multiplyScalar(1.5);
-      seam.add(sp, ry, new THREE.Vector3(1, h * 0.92, 1), tmp);
     }
   }
 
   // ---- reeds (river, return) ----------------------------------------------------
   const reedCount = def.flora === 'river' ? n(260) : def.flora === 'return' ? n(240) : 0;
   if (reedCount) {
-    const reed = mk(
-      new THREE.ConeGeometry(0.07, 1, 4).translate(0, 0.5, 0),
-      tuftMaterial(0.12),
-      reedCount,
-    );
+    const reed = mkProto(tuftKey(2), tuftMaterial(0.12, THREE.DoubleSide), reedCount);
     for (let i = 0; i < reedCount; i++) {
       // river reeds hug the banks
       let p: THREE.Vector3 | null = null;
@@ -178,7 +176,7 @@ export function buildFlora(def: StratumDef, terrain: Terrain, rng: Rng, density:
       if (!p) continue;
       const h = rng.range(1.4, 3.6);
       const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(rng.range(-1, 1), 0, rng.range(-1, 1)).normalize(), rng.range(0, 0.25));
-      reed.add(p, 0, new THREE.Vector3(rng.range(0.8, 1.4), h, rng.range(0.8, 1.4)), tmp.set(def.flora === 'return' ? 0x9fd05a : 0x2f8f9a).multiplyScalar(rng.range(0.7, 1.3)), q);
+      reed.add(p, 0, new THREE.Vector3(rng.range(0.8, 1.4), h * 0.6, rng.range(0.8, 1.4)), tmp.set(def.flora === 'return' ? 0x9fd05a : 0x2f8f9a).multiplyScalar(rng.range(0.7, 1.3)), q);
     }
   }
 
@@ -203,7 +201,7 @@ export function buildFlora(def: StratumDef, terrain: Terrain, rng: Rng, density:
   // ---- ground tufts: eye-level detail everywhere --------------------------------------------
   const tuftCount = def.flora === 'mirror' ? 0 : n(def.flora === 'return' ? 900 : 650);
   if (tuftCount) {
-    const tuft = mk(new THREE.ConeGeometry(0.1, 0.75, 4).translate(0, 0.37, 0), tuftMaterial(0.45), tuftCount);
+    const tuft = mkProto(tuftKey(1), tuftMaterial(0.45, THREE.DoubleSide), tuftCount);
     for (let i = 0; i < tuftCount; i++) {
       const p = spot(2, R * 1.02, 0.2, 4);
       if (!p) continue;
@@ -212,55 +210,25 @@ export function buildFlora(def: StratumDef, terrain: Terrain, rng: Rng, density:
     }
   }
 
-  // ---- fractal trees (canopy) + blackened Null-grove trees around enemy camps --------------------
-  const UPv = UP;
-  const branchesLive = def.flora === 'canopy' ? mk(new THREE.CylinderGeometry(0.62, 1, 1, 5).translate(0, 0.5, 0), barkMaterial({ roughness: 0.6 }), Math.round(16 * density * (R / 62) * (R / 62) * 0.7) * 170 + 400) : null;
-  const tipsLive = def.flora === 'canopy' ? mk(new THREE.IcosahedronGeometry(0.3, 0), glowBasic({}, floraGlow), Math.round(16 * density * (R / 62) * (R / 62) * 0.7) * 90 + 200) : null;
-  const deadN = groves.length * 8;
-  const branchesDead = deadN ? mk(new THREE.CylinderGeometry(0.55, 1, 1, 5).translate(0, 0.5, 0), barkMaterial({ roughness: 0.8, moss: 0 }), deadN * 90) : null;
-  const tipsDead = deadN ? mk(new THREE.OctahedronGeometry(0.22, 0), glowBasic({}, floraGlow), deadN * 50) : null;
-
-  const growTree = (
-    base: THREE.Vector3, dir: THREE.Vector3, len: number, rad: number, depth: number, maxDepth: number,
-    br: Batch, tp: Batch, trunk: THREE.Color, bud: THREE.Color, tipCols: number[], tipK: [number, number], spread: number,
-  ) => {
-    const end = base.clone().addScaledVector(dir, len);
-    _q.setFromUnitVectors(UPv, dir);
-    const k = 1 - depth / maxDepth;
-    tmp.copy(trunk).lerp(bud, k * k * 0.55);
-    br.add(base, 0, new THREE.Vector3(rad, len, rad), tmp, _q.clone());
-    if (depth === 0) {
-      const c = new THREE.Color(rng.pick(tipCols)).multiplyScalar(rng.range(tipK[0], tipK[1]));
-      tp.add(end, 0, rng.range(0.7, 1.25), c);
-      return;
-    }
-    const kids = depth >= maxDepth - 1 ? 3 : 2;
-    for (let i = 0; i < kids; i++) {
-      const axis = new THREE.Vector3(rng.gauss(), rng.gauss(), rng.gauss()).cross(dir).normalize();
-      const nd = dir.clone().applyAxisAngle(axis, rng.range(0.45, 0.85) * spread);
-      nd.y += 0.18;
-      nd.normalize();
-      growTree(end, nd, len * rng.range(0.66, 0.8), rad * 0.62, depth - 1, maxDepth, br, tp, trunk, bud, tipCols, tipK, spread);
-    }
-  };
-
-  if (branchesLive && tipsLive) {
-    const treeCount = Math.round(16 * density * (R / 62) * (R / 62) * 0.7);
-    const trunkCol = new THREE.Color(0x4a2f7a);
-    const budCol = new THREE.Color(accentA);
+  // ---- generated trees (canopy) + blackened Null-grove trees around enemy camps ----------------------
+  const treeCount = def.flora === 'canopy' ? Math.round(16 * density * (R / 62) * (R / 62) * 0.7) : 0;
+  if (treeCount) {
+    const canopyMat = treeMaterial(0x4a2f7a, accentA, accentB, 1.1);
+    const spireMat = treeMaterial(0x2e2448, accentB, accentA, 0.9);
+    const canopy = Array.from({ length: TREE_VARIANTS }, (_, v) => mkProto(treeKey('canopy', v, 0), canopyMat, treeCount));
+    const spire = Array.from({ length: TREE_VARIANTS }, (_, v) => mkProto(treeKey('spire', v, 0), spireMat, treeCount));
     for (let t = 0; t < treeCount; t++) {
       const p = spot(9, R * 0.96, 0.1);
       if (!p) continue;
-      const trunkLen = rng.range(5, 8.5);
-      const lean = new THREE.Vector3(rng.range(-0.12, 0.12), 1, rng.range(-0.12, 0.12)).normalize();
-      const rad = 0.55 + trunkLen * 0.05;
-      growTree(p, lean, trunkLen, rad, 5, 5, branchesLive, tipsLive, trunkCol, budCol, [accentA, accentA, accentB], [1.1, 1.8], 1);
-      colliders.add(p.x, p.z, rad * 0.95 + 0.25);
+      const s = rng.range(0.9, 1.4);
+      p.y -= 0.1;
+      rng.pick(rng.chance(0.75) ? canopy : spire).add(p, rng.range(0, TAU), s, tmp.setScalar(rng.range(0.85, 1.15)));
+      colliders.add(p.x, p.z, 0.45 * s + 0.25);
     }
   }
-  if (branchesDead && tipsDead) {
-    const trunkCol = new THREE.Color(0x1c1018);
-    const budCol = new THREE.Color(0x4a1a2c);
+  if (groves.length) {
+    const deadMat = treeMaterial(0x1c1018, 0xff3b7a, 0xff7a3b, 0.9, 0.9);
+    const dead = Array.from({ length: TREE_VARIANTS }, (_, v) => mkProto(treeKey('blight', v, 0), deadMat, groves.length * 8));
     for (const gv of groves) {
       for (let t = 0; t < 8; t++) {
         const a = rng.range(0, TAU);
@@ -269,10 +237,7 @@ export function buildFlora(def: StratumDef, terrain: Terrain, rng: Rng, density:
         const z = gv.z + Math.sin(a) * r;
         if (terrain.riverAt(x, z) > 0.2 || Math.hypot(x, z) > R * 0.97) continue;
         if (avoid.some((v) => v.r >= 12 && (v.x - x) ** 2 + (v.z - z) ** 2 < v.r * v.r)) continue; // set-piece clearings
-        const p = new THREE.Vector3(x, terrain.heightAt(x, z), z);
-        const len = rng.range(3.5, 6.5);
-        const lean = new THREE.Vector3(rng.range(-0.25, 0.25), 1, rng.range(-0.25, 0.25)).normalize();
-        growTree(p, lean, len, 0.4 + len * 0.04, 4, 4, branchesDead, tipsDead, trunkCol, budCol, [0xff3b7a, 0xff7a3b], [0.55, 0.95], 1.25);
+        rng.pick(dead).add(new THREE.Vector3(x, terrain.heightAt(x, z) - 0.1, z), rng.range(0, TAU), rng.range(0.9, 1.4), tmp.setScalar(rng.range(0.8, 1.1)));
         colliders.add(x, z, 0.65);
       }
     }

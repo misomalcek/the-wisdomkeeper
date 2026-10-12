@@ -21,6 +21,8 @@ const SHAPE = {
   orbit: true,
   /** World Genome: recorded choices evolve each region's land, colours, glyphs and living field. */
   genome: true,
+  /** Landform provinces: eroded ranges, canyon mesas, dune seas, karst pillars and calderas across the Wilds. */
+  landforms: true,
 } as const;
 
 const LOOK: Record<string, Record<Tier, boolean>> = {
@@ -36,10 +38,12 @@ const LOOK: Record<string, Record<Tier, boolean>> = {
   glyphs: { low: true, medium: true, high: true, ultra: true },
   /** Vertex wind on Wilds flora. */
   wind: { low: false, medium: true, high: true, ultra: true },
+  /** Far land out to ~4.5 km (one polar mesh built in a worker). */
+  horizon: { low: true, medium: true, high: true, ultra: true },
 };
 
 export type ShapeFlag = keyof typeof SHAPE;
-export type LookFlag = 'workers' | 'oklab' | 'coast' | 'living' | 'glyphs' | 'wind';
+export type LookFlag = 'workers' | 'oklab' | 'coast' | 'living' | 'glyphs' | 'wind' | 'horizon';
 export type Flag = ShapeFlag | LookFlag;
 export const ALL_FLAGS = [...Object.keys(SHAPE), ...Object.keys(LOOK)] as Flag[];
 

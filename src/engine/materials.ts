@@ -4,7 +4,7 @@ import { MeshStandardNodeMaterial, MeshBasicNodeMaterial, LineBasicNodeMaterial,
 import {
   Fn, uniform, float, vec2, vec3, vec4, color, mix, sin, fract, floor, dot, pow, max, smoothstep, abs, clamp,
   positionWorld, normalWorld, cameraPosition, diffuseColor, output, mrt, uv, exp, positionView, emissive,
-  normalView, faceDirection,
+  normalView, faceDirection, select, min,
 } from 'three/tsl';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -78,10 +78,34 @@ export function glow<T extends NodeMaterial>(m: T, k: number | N = 1): T {
   return m;
 }
 
-/** Scene fog density (FogExp2), mirrored here so the bloom buffer fades with distance like the lit image does. */
+/** The region's fog density (its old FogExp2 setting); the height fog below derives its extinction from it. */
 export const fogDensity: N = uniform(0.01);
-/** Fraction of light that survives the fog to the camera (1 = none fogged). */
-export const fogKeep: N = exp(fogDensity.mul(fogDensity).mul(positionView.length().pow(2)).negate());
+/** World height the haze is densest at (eases after the ground under the hero). */
+export const fogBase: N = uniform(0);
+/**
+ * 1 when the region draws the far land (horizon mesh): past 150 m the path length counts a quarter, so ranges read
+ * as silhouettes kilometres out. 0 for bounded regions: the haze closes in steeply near the streamed edge (~260 m).
+ */
+export const fogFar: N = uniform(0);
+/** Scale height of the haze (m): above it the air clears, so ridges rise out of hazy valleys. */
+const FOG_H = 55;
+
+/**
+ * Fraction of light that survives the haze to the camera (1 = none fogged): exponential height fog integrated along
+ * the view ray, τ = σ·d·(⟨e^(−h/H)⟩ + floor). Close up it matches the old FogExp2 mood; distant valleys sink into
+ * haze while peaks and ridgelines stay readable kilometres away (aerial perspective, not a wall at 200 m).
+ */
+export const fogKeep: N = Fn(() => {
+  const d: N = positionView.length();
+  const hc: N = max(cameraPosition.y.sub(fogBase), -25);
+  const hf: N = max(positionWorld.y.sub(fogBase), -25);
+  const dh: N = hf.sub(hc);
+  const ec: N = exp(hc.div(-FOG_H));
+  const ef: N = exp(hf.div(-FOG_H));
+  const avg: N = select(abs(dh).lessThan(0.5), ec, ec.sub(ef).mul(FOG_H).div(dh));
+  const dEff: N = mix(d.add(pow(d.div(250), 4).mul(180)), min(d, 150).add(max(d.sub(150), 0).mul(0.25)), fogFar);
+  return exp(fogDensity.mul(0.55).mul(dEff).mul(avg.add(0.1)).negate());
+})();
 
 /** What every fragment writes into the bloom target: its emissive light, fogged. */
 export const bloomEmissive: N = vec4(emissive.mul(fogKeep), 1);

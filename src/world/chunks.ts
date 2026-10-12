@@ -3,6 +3,7 @@ import type { Terrain } from './terrain';
 import { buildChunkArrays, CHUNK, NEUTRAL_STYLE, type ChunkArrays, type ChunkStyle } from './gen/chunkMesh';
 import type { ShapeOpts } from './gen/shape';
 import { flag } from '../engine/flags';
+import type { HorizonArrays } from './gen/horizonMesh';
 
 export { CHUNK };
 /** Segments per chunk side for each level of detail. */
@@ -24,16 +25,18 @@ const key = (cx: number, cz: number) => `${cx},${cz}`;
 // ------------------------------------------------------------------------------------------------ worker pool
 
 type ChunkMsg = { type: 'chunk'; id: number; ticket: number; cx: number; cz: number; lod: number; a: ChunkArrays };
+export type HorizonMsg = { type: 'horizon'; id: number; ticket: number; x: number; z: number; h: HorizonArrays };
 
 /**
  * Up to two module workers shared by every streamer (one region at a time). Each holds its own copy of the ground
  * shape; a new region re-initialises them with a new id so late chunks of the old region are dropped.
  */
-class ChunkPool {
+export class ChunkPool {
   private static inst: ChunkPool | null | undefined;
   private workers: Worker[] = [];
   private inflight: number[] = [];
   onChunk: ((m: ChunkMsg) => void) | null = null;
+  onHorizon: ((m: HorizonMsg) => void) | null = null;
 
   static get(): ChunkPool | null {
     if (ChunkPool.inst !== undefined) return ChunkPool.inst;
@@ -44,9 +47,10 @@ class ChunkPool {
       const p = new ChunkPool();
       for (let i = 0; i < n; i++) {
         const w = new Worker(new URL('./chunks.worker.ts', import.meta.url), { type: 'module' });
-        w.onmessage = (e: MessageEvent<ChunkMsg>) => {
+        w.onmessage = (e: MessageEvent<ChunkMsg | HorizonMsg>) => {
           p.inflight[i] = Math.max(0, p.inflight[i] - 1);
-          p.onChunk?.(e.data);
+          if (e.data.type === 'horizon') p.onHorizon?.(e.data);
+          else p.onChunk?.(e.data);
         };
         p.workers.push(w);
         p.inflight.push(0);
@@ -67,6 +71,13 @@ class ChunkPool {
   }
   get size() {
     return this.workers.length;
+  }
+  /** The far land around (x, z): goes to the least busy worker, answered through `onHorizon`. */
+  requestHorizon(id: number, ticket: number, x: number, z: number) {
+    let best = 0;
+    for (let i = 1; i < this.workers.length; i++) if (this.inflight[i] < this.inflight[best]) best = i;
+    this.inflight[best]++;
+    this.workers[best].postMessage({ type: 'horizon', id, ticket, x, z });
   }
   request(id: number, ticket: number, cx: number, cz: number, lod: number) {
     let best = 0;
@@ -105,6 +116,10 @@ export class TerrainStreamer {
   private heights = new Map<string, { n: number; h: Float32Array }>();
   /** Chunks built so far (debug / tests). */
   built = 0;
+  /** The far land out to the horizon (one mesh, rebuilt off-thread as the hero travels); null when off. */
+  readonly horizon: THREE.Mesh | null = null;
+  private hzAt: { x: number; z: number } | null = null;
+  private hzTicket = 0;
 
   constructor(private terrain: Terrain, private style: ChunkStyle = NEUTRAL_STYLE) {
     const side = 2 * VIEW_RINGS + 1;
@@ -124,7 +139,38 @@ export class TerrainStreamer {
       this.pool.onChunk = (m) => {
         if (m.id === this.shapeId) this.ready.push(m);
       };
+      if (terrain.wild && flag('horizon')) {
+        this.horizon = new THREE.Mesh(new THREE.BufferGeometry(), terrain.horizonMaterial);
+        this.horizon.frustumCulled = false;
+        this.horizon.renderOrder = -1;
+        this.horizon.visible = false; // until the first far mesh arrives
+        this.pool.onHorizon = (m) => {
+          if (m.id !== this.shapeId || m.ticket !== this.hzTicket || !this.horizon) return;
+          const g = new THREE.BufferGeometry();
+          g.setAttribute('position', new THREE.BufferAttribute(m.h.pos, 3));
+          g.setAttribute('normal', new THREE.BufferAttribute(m.h.nor, 3));
+          g.setAttribute('aForm', new THREE.BufferAttribute(m.h.form, 4));
+          g.setAttribute('aTint', new THREE.BufferAttribute(m.h.tint, 3));
+          g.setAttribute('aMisc', new THREE.BufferAttribute(m.h.misc, 2));
+          g.setIndex(new THREE.BufferAttribute(m.h.idx, 1));
+          this.horizon.geometry.dispose();
+          this.horizon.geometry = g;
+          this.horizon.visible = true;
+        };
+      }
     }
+  }
+
+  /** Re-centre the far land when the hero has travelled far enough from where it was last built. */
+  private updateHorizon(x: number, z: number, force = false) {
+    if (!this.horizon || !this.pool) return;
+    const h = this.hzAt;
+    if (!force && h && Math.hypot(x - h.x, z - h.z) < 140) return;
+    // quantised centres: the same spot always yields the same far mesh
+    const qx = Math.round(x / 32) * 32;
+    const qz = Math.round(z / 32) * 32;
+    this.hzAt = { x: qx, z: qz };
+    this.pool.requestHorizon(this.shapeId, ++this.hzTicket, qx, qz);
   }
   private reserveV: number;
   private reserveI: number;
@@ -146,6 +192,7 @@ export class TerrainStreamer {
   }
 
   update(x: number, z: number, budget = 2, sync = false) {
+    this.updateHorizon(x, z, sync);
     const cx = Math.floor(x / CHUNK);
     const cz = Math.floor(z / CHUNK);
     if (cx !== this.lastCx || cz !== this.lastCz) {
@@ -221,6 +268,7 @@ export class TerrainStreamer {
     placeholder.setAttribute('aBlight', new THREE.BufferAttribute(new Float32Array(3), 1));
     placeholder.setAttribute('aTint', new THREE.BufferAttribute(new Float32Array(9).fill(1), 3));
     placeholder.setAttribute('aIsle', new THREE.BufferAttribute(new Float32Array(3).fill(60), 1));
+    placeholder.setAttribute('aForm', new THREE.BufferAttribute(new Float32Array(12), 4));
     placeholder.setIndex([0, 1, 2]);
     const g = this.mesh.addGeometry(placeholder, this.reserveV, this.reserveI);
     this.slotGeo.push(g);
@@ -301,7 +349,11 @@ export class TerrainStreamer {
 
   dispose() {
     this.mesh.dispose();
-    if (this.pool) this.pool.onChunk = null;
+    this.horizon?.geometry.dispose();
+    if (this.pool) {
+      this.pool.onChunk = null;
+      this.pool.onHorizon = null;
+    }
   }
 }
 
@@ -313,6 +365,7 @@ function toGeometry(a: ChunkArrays) {
   g.setAttribute('aBlight', new THREE.BufferAttribute(a.bli, 1));
   g.setAttribute('aTint', new THREE.BufferAttribute(a.tint, 3));
   g.setAttribute('aIsle', new THREE.BufferAttribute(a.isle, 1));
+  g.setAttribute('aForm', new THREE.BufferAttribute(a.form, 4));
   g.setIndex(new THREE.BufferAttribute(a.idx, 1));
   g.computeBoundingBox();
   g.computeBoundingSphere();
