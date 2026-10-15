@@ -619,6 +619,9 @@ export class UI {
   setBloomLabel(on: boolean) {
     $('btn-bloom').textContent = `Bloom: ${on ? 'on' : 'off'}`;
   }
+  setHazeLabel(on: boolean) {
+    $('btn-haze').textContent = `Haze: ${on ? 'on' : 'off'}`;
+  }
   setQualityLabel(q: string) {
     $('btn-quality').textContent = `Quality: ${q[0].toUpperCase()}${q.slice(1)}`;
   }

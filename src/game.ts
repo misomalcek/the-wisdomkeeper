@@ -216,11 +216,12 @@ export class Game {
   // ---------------------------------------------------------------- settings / save
 
   private applySettings() {
-    const s = store.get<{ vol: number; muted: boolean; bloom: boolean; sens: number }>(SET_KEY);
+    const s = store.get<{ vol: number; muted: boolean; bloom: boolean; haze?: boolean; sens: number }>(SET_KEY);
     if (!s) return;
     this.audio.volume = s.vol ?? 0.7;
     this.audio.muted = !!s.muted;
     this.gfx.setBloom(s.bloom !== false);
+    this.gfx.setHaze(s.haze !== false);
     (document.getElementById('vol') as HTMLInputElement).value = String(Math.round(this.audio.volume * 100));
     if (s.sens) {
       (document.getElementById('sens') as HTMLInputElement).value = String(s.sens);
@@ -228,6 +229,7 @@ export class Game {
     }
     this.ui.setMuteLabel(this.audio.muted);
     this.ui.setBloomLabel(this.gfx.bloomEnabled);
+    this.ui.setHazeLabel(this.gfx.hazeEnabled);
   }
   /** The quality the player picked (kept in settings), or undefined for the device default. */
   private quality: Quality | undefined = savedQuality() ?? undefined;
@@ -249,6 +251,7 @@ export class Game {
       vol: this.audio.volume,
       muted: this.audio.muted,
       bloom: this.gfx.bloomEnabled,
+      haze: this.gfx.hazeEnabled,
       sens: Math.round((this.cam.sens / 0.0022) * 100),
       ...(this.quality ? { quality: this.quality } : {}),
     });
@@ -328,6 +331,11 @@ export class Game {
       ui.setBloomLabel(this.gfx.bloomEnabled);
       this.saveSettings();
     });
+    ui.on('btn-haze', () => {
+      this.gfx.setHaze(!this.gfx.hazeEnabled);
+      ui.setHazeLabel(this.gfx.hazeEnabled);
+      this.saveSettings();
+    });
     (document.getElementById('vol') as HTMLInputElement).addEventListener('input', (e) => {
       this.audio.setVolume(Number((e.target as HTMLInputElement).value) / 100);
       this.saveSettings();
@@ -372,6 +380,7 @@ export class Game {
     }
     this.ui.setMuteLabel(this.audio.muted);
     this.ui.setBloomLabel(this.gfx.bloomEnabled);
+    this.ui.setHazeLabel(this.gfx.hazeEnabled);
     this.ui.setQualityLabel(this.gfx.quality);
   }
 

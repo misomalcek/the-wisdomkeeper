@@ -20,6 +20,8 @@ export class Input {
   lastDevice: 'mouse' | 'touch' = 'mouse';
   /** When false (tests, or pointer lock refused) mouse look is unavailable and arrows turn the camera. */
   lockWanted = true;
+  /** Look follows the mouse even when the webview refuses pointer lock. */
+  private soft = false;
   private target?: HTMLElement;
   private onAnyKey?: () => void;
   private lockListeners: ((locked: boolean) => void)[] = [];
@@ -43,7 +45,7 @@ export class Input {
     target.addEventListener('pointermove', (e) => {
       if (e.pointerType === 'touch') return;
       this.lastDevice = 'mouse';
-      if (this.locked) {
+      if (this.locked || this.soft) {
         this.lookX += e.movementX;
         this.lookY += e.movementY;
       }
@@ -90,15 +92,20 @@ export class Input {
     this.lockListeners.push(f);
   }
   requestLock() {
-    if (!this.lockWanted || this.lastDevice === 'touch' || !this.target || this.locked) return;
+    if (!this.lockWanted || this.lastDevice === 'touch' || !this.target) return;
+    this.soft = true;
+    this.target.style.cursor = 'none';
+    if (this.locked) return;
     try {
       const r = this.target.requestPointerLock() as unknown as Promise<void> | undefined;
       r?.catch?.(() => undefined);
     } catch {
-      /* unsupported: arrow keys still turn the camera */
+      /* the webview refused the lock; soft look still turns the camera */
     }
   }
   releaseLock() {
+    this.soft = false;
+    if (this.target) this.target.style.cursor = '';
     if (this.locked) document.exitPointerLock();
   }
 

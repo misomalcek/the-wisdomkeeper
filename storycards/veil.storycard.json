@@ -1,0 +1,121 @@
+{
+  "format": "wisdomkeeper.storycard",
+  "version": 1,
+  "savedAt": "2026-10-15T18:00:00.000Z",
+  "title": "Cycle 1 · The Veil of Void · Lv 16",
+  "punches": [],
+  "run": {
+    "version": 2,
+    "cycle": 1,
+    "seed": 48291,
+    "stratumIndex": 3,
+    "tiers": {
+      "root": 2,
+      "echo": 1,
+      "flow": 1
+    },
+    "history": [
+      {
+        "stratum": "seedbed",
+        "stratumName": "The Seedbed",
+        "choice": {
+          "id": "memory",
+          "affinity": "echo",
+          "title": "The Awakening of Memory"
+        },
+        "kills": 10,
+        "echoes": 3,
+        "deaths": 0,
+        "time": 400,
+        "purified": 1,
+        "embraced": 0
+      },
+      {
+        "stratum": "river",
+        "stratumName": "The River of Becoming",
+        "choice": {
+          "id": "legacy",
+          "affinity": "echo",
+          "title": "The River of Legacy"
+        },
+        "kills": 20,
+        "echoes": 5,
+        "deaths": 1,
+        "time": 640,
+        "purified": 2,
+        "embraced": 0
+      },
+      {
+        "stratum": "canopy",
+        "stratumName": "The Fractal Canopy",
+        "choice": {
+          "id": "echoall",
+          "affinity": "echo",
+          "title": "The Echo of All Beings"
+        },
+        "kills": 28,
+        "echoes": 6,
+        "deaths": 1,
+        "time": 820,
+        "purified": 2,
+        "embraced": 1
+      }
+    ],
+    "echoes": [
+      {
+        "x": 12,
+        "z": -6,
+        "affinity": "root",
+        "stratum": "seedbed",
+        "radius": 140
+      }
+    ],
+    "maxHp": 190,
+    "deaths": 1,
+    "kills": 70,
+    "elapsed": 640,
+    "difficulty": 1,
+    "latent": [
+      0.2,
+      0,
+      0,
+      0.1
+    ],
+    "level": 16,
+    "xp": 20,
+    "skillPoints": 1,
+    "skills": {
+      "deep_root": 1
+    },
+    "inventory": [],
+    "equipped": {
+      "blade": {
+        "id": "blade1",
+        "slot": "blade",
+        "name": "Root-Blade Unit",
+        "rarity": "common",
+        "level": 1,
+        "stats": {
+          "damage": 0.12
+        }
+      }
+    },
+    "skin": "resonant",
+    "nullPoints": 0,
+    "purityPoints": 1,
+    "remembrances": [
+      "purify"
+    ],
+    "fiber": 30,
+    "crystals": 4,
+    "telemetry": {
+      "embrace": 0,
+      "purify": 1,
+      "flightTime": 20,
+      "meleeKills": 10,
+      "resonanceSpent": 80
+    },
+    "missions": []
+  },
+  "library": []
+}

@@ -69,6 +69,8 @@ export class Gfx {
   private fpsAcc = 0;
   fps = 60;
   bloomEnabled = true;
+  hazeEnabled = true;
+  private regionFog = 0.01;
   /** Screen-space light shafts (high quality and up; `?noshafts` disables). */
   shafts = !new URLSearchParams(location.search).has('noshafts');
   private adaptive = true;
@@ -203,6 +205,10 @@ export class Gfx {
     this.pipeline = pipeline;
   }
 
+  setHaze(on: boolean) {
+    this.hazeEnabled = on;
+    fogDensity.value = on ? this.regionFog : 0;
+  }
   setBloom(on: boolean) {
     if (on === this.bloomEnabled) return;
     this.bloomEnabled = on;
@@ -289,7 +295,8 @@ export class Gfx {
     this.fogColor.value.copy(fog);
     this.scene.fog = null;
     this.scene.fogNode ??= tslFog(this.fogColor, float(1).sub(fogKeep));
-    fogDensity.value = p.fogDensity;
+    this.regionFog = p.fogDensity;
+    fogDensity.value = this.hazeEnabled ? p.fogDensity : 0;
     this.hemi.color.set(p.hemiSky);
     this.hemi.groundColor.set(p.hemiGround);
     this.sun.color.set(p.sun);

@@ -1,0 +1,91 @@
+{
+  "format": "wisdomkeeper.storycard",
+  "version": 1,
+  "savedAt": "2026-10-15T18:00:00.000Z",
+  "title": "Cycle 1 · The River of Becoming · Lv 6",
+  "punches": [],
+  "run": {
+    "version": 2,
+    "cycle": 1,
+    "seed": 48291,
+    "stratumIndex": 1,
+    "tiers": {
+      "root": 1,
+      "echo": 0,
+      "flow": 0
+    },
+    "history": [
+      {
+        "stratum": "seedbed",
+        "stratumName": "The Seedbed",
+        "choice": {
+          "id": "fusion",
+          "affinity": "root",
+          "title": "The Fusion of Roots and Silicon"
+        },
+        "kills": 12,
+        "echoes": 2,
+        "deaths": 1,
+        "time": 480,
+        "purified": 1,
+        "embraced": 0
+      }
+    ],
+    "echoes": [
+      {
+        "x": 12,
+        "z": -6,
+        "affinity": "root",
+        "stratum": "seedbed",
+        "radius": 140
+      }
+    ],
+    "maxHp": 130,
+    "deaths": 1,
+    "kills": 18,
+    "elapsed": 640,
+    "difficulty": 1,
+    "latent": [
+      0.2,
+      0,
+      0,
+      0.1
+    ],
+    "level": 6,
+    "xp": 20,
+    "skillPoints": 1,
+    "skills": {
+      "deep_root": 1
+    },
+    "inventory": [],
+    "equipped": {
+      "blade": {
+        "id": "blade1",
+        "slot": "blade",
+        "name": "Root-Blade Unit",
+        "rarity": "common",
+        "level": 1,
+        "stats": {
+          "damage": 0.12
+        }
+      }
+    },
+    "skin": "resonant",
+    "nullPoints": 0,
+    "purityPoints": 1,
+    "remembrances": [
+      "purify"
+    ],
+    "fiber": 30,
+    "crystals": 4,
+    "telemetry": {
+      "embrace": 0,
+      "purify": 1,
+      "flightTime": 20,
+      "meleeKills": 10,
+      "resonanceSpent": 80
+    },
+    "missions": []
+  },
+  "library": []
+}
