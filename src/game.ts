@@ -1070,7 +1070,7 @@ export class Game {
     // camera look: mouse (pointer lock), touch drag, or arrow keys as a fallback
     const look = this.input.consumeLook(this.look);
     if (this.trav.isOpen) this.trav.steer(look.x, look.y);
-    else if (this.input.locked || this.input.lastDevice === 'touch') this.cam.look(look.x, look.y);
+    else if (this.input.looking || this.input.lastDevice === 'touch') this.cam.look(look.x, look.y);
     const ar = (this.input.isDown('ArrowLeft') ? 1 : 0) - (this.input.isDown('ArrowRight') ? 1 : 0);
     const au = (this.input.isDown('ArrowDown') ? 1 : 0) - (this.input.isDown('ArrowUp') ? 1 : 0);
     if (ar || au) this.cam.look(-ar * dt * 900, au * dt * 700);
@@ -2345,7 +2345,7 @@ export class Game {
       aiming: p.aiming,
       onEnemy: !!this.aim.enemy,
       flying: p.mode === 'flight',
-      lockNeeded: this.input.lockWanted && this.input.lastDevice === 'mouse' && !this.input.locked && this.mode === 'play' && !this.paused,
+      lockNeeded: this.input.lockWanted && this.input.lastDevice === 'mouse' && !this.input.looking && this.mode === 'play' && !this.paused,
     };
     this.ui.updateHud(s);
     const m = this.markers();

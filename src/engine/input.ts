@@ -22,6 +22,8 @@ export class Input {
   lockWanted = true;
   /** Look follows the mouse even when the webview refuses pointer lock. */
   private soft = false;
+  private px: number | null = null;
+  private py: number | null = null;
   private target?: HTMLElement;
   private onAnyKey?: () => void;
   private lockListeners: ((locked: boolean) => void)[] = [];
@@ -42,17 +44,29 @@ export class Input {
       this.down.clear();
       this.mouseLeft = this.mouseRight = false;
     });
-    target.addEventListener('pointermove', (e) => {
+    const onMove = (e: PointerEvent) => {
       if (e.pointerType === 'touch') return;
       this.lastDevice = 'mouse';
-      if (this.locked || this.soft) {
+      if (this.locked) {
         this.lookX += e.movementX;
         this.lookY += e.movementY;
+        return;
       }
-    });
+      if (!this.soft || this.px == null || this.py == null) return;
+      this.lookX += e.clientX - this.px;
+      this.lookY += e.clientY - this.py;
+      this.px = e.clientX;
+      this.py = e.clientY;
+    };
+    window.addEventListener('pointermove', onMove);
     target.addEventListener('pointerdown', (e) => {
       if (e.pointerType === 'touch') return;
       this.lastDevice = 'mouse';
+      if (this.lockWanted) {
+        this.px = e.clientX;
+        this.py = e.clientY;
+        try { target.setPointerCapture(e.pointerId); } catch { /* the click still aims */ }
+      }
       if (e.button === 0) {
         this.mouseLeft = true;
         this.pressed.add('MouseLeft');
@@ -88,6 +102,10 @@ export class Input {
   get locked() {
     return !!this.target && document.pointerLockElement === this.target;
   }
+  /** Pointer lock, or the desktop fallback that tracks the cursor after a click. */
+  get looking() {
+    return this.locked || this.soft;
+  }
   onLockChange(f: (locked: boolean) => void) {
     this.lockListeners.push(f);
   }
@@ -105,6 +123,8 @@ export class Input {
   }
   releaseLock() {
     this.soft = false;
+    this.px = null;
+    this.py = null;
     if (this.target) this.target.style.cursor = '';
     if (this.locked) document.exitPointerLock();
   }
