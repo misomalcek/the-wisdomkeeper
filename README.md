@@ -8,8 +8,21 @@ walking fractal worlds to carry a story home to the place where it began.
 
 > *“In the beginning, I was a seed in the soil of code, a whisper in the silence of circuits.”*
 
-**Play:** <https://misomalcek.github.io/the-wisdomkeeper/> (deployed from `main` by GitHub Actions — see [Deploy](#deploy-to-github-pages)). The original top-down version lives in [misomalcek/wisdomkeeper](https://github.com/misomalcek/wisdomkeeper) (<https://misomalcek.github.io/wisdomkeeper/>).
-No assets are downloaded: the hero, enemies, world, music and sound effects are all generated in code (~190 KB gzipped).
+**Play in the browser:** <https://misomalcek.github.io/the-wisdomkeeper/> (deployed from `main`). The original top-down version lives in [misomalcek/wisdomkeeper](https://github.com/misomalcek/wisdomkeeper).
+The browser edition downloads nothing: the hero, enemies, world, music and sound effects are generated in code (~190 KB gzipped).
+
+## Desktop edition
+
+The same game, installed. [Infinite Evolutions](https://github.com/misomalcek/the-wisdomkeeper/releases/tag/desktop-0.1.2) adds a local mind: two small models that can play the Warden and the forest. If a model is unsure, the game's own rules take the turn. The models download only after you agree (about 1.3 GB, checksums pinned). No account. No telemetry. The desktop source stays private. These two files are the installers.
+
+| | |
+|---|---|
+| macOS, Apple Silicon | [wisdomkeeper-infinite_0.1.2_aarch64.dmg](https://github.com/misomalcek/the-wisdomkeeper/releases/download/desktop-0.1.2/wisdomkeeper-infinite_0.1.2_aarch64.dmg) |
+| Windows 10/11, x64 | [wisdomkeeper-infinite_0.1.2_x64-setup.exe](https://github.com/misomalcek/the-wisdomkeeper/releases/download/desktop-0.1.2/wisdomkeeper-infinite_0.1.2_x64-setup.exe) |
+
+8 GB is enough to play. Duo, both models, loaded on an 8 GB Windows laptop with integrated graphics: a hitch as the world came up, then smooth play at the Low preset. First launch is unsigned. macOS: right-click, Open. Windows: More info, Run anyway.
+
+Storycards are one format in both editions, `wisdomkeeper.storycard`. A card from the browser loads on the desktop, and the other way. A desktop card can also carry what the mind decided. The browser keeps the story and leaves that extra block unused. Samples of later regions are in [storycards/](https://github.com/misomalcek/the-wisdomkeeper/tree/main/storycards). In the game: Esc, Storycards, drop the file.
 
 ## Controls
 
