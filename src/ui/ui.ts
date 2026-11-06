@@ -71,8 +71,8 @@ export interface InvHandlers {
 }
 
 type OverlayId =
-  | 'title' | 'prologue' | 'choice' | 'binary' | 'timeline' | 'controls' | 'library' | 'pause' | 'death' | 'ending' | 'inventory' | 'map' | 'storycards';
-const ALL: OverlayId[] = ['title', 'prologue', 'choice', 'binary', 'timeline', 'controls', 'library', 'pause', 'death', 'ending', 'inventory', 'map', 'storycards'];
+  | 'title' | 'choice' | 'binary' | 'timeline' | 'controls' | 'library' | 'pause' | 'death' | 'ending' | 'inventory' | 'map' | 'storycards';
+const ALL: OverlayId[] = ['title', 'choice', 'binary', 'timeline', 'controls', 'library', 'pause', 'death', 'ending', 'inventory', 'map', 'storycards'];
 
 const SLOT_ICON: Record<Slot, string> = { helm: '◭', armor: '⬡', boots: '◢', blade: '⟋', modulator: '❂', core: '◈' };
 
@@ -100,7 +100,7 @@ export class UI {
     return ALL.some((o) => this.isOpen(o));
   }
   private syncOverlayClass() {
-    document.body.classList.toggle('ov', ALL.some((o) => o !== 'prologue' && this.isOpen(o)));
+    document.body.classList.toggle('ov', ALL.some((o) => this.isOpen(o)));
   }
   show(id: OverlayId) {
     $(id).classList.remove('hidden');
@@ -427,40 +427,6 @@ export class UI {
   }
 
   // ---- overlays ------------------------------------------------------------------
-  prologue(lines: string[], done: () => void) {
-    this.show('prologue');
-    const p = $('prologue-text');
-    let i = 0;
-    let busy = false;
-    const next = () => {
-      if (busy) return;
-      if (i >= lines.length) {
-        cleanup();
-        done();
-        return;
-      }
-      busy = true;
-      p.classList.remove('on');
-      window.setTimeout(() => {
-        p.textContent = lines[i++];
-        p.classList.add('on');
-        busy = false;
-      }, 700);
-    };
-    const key = (e: KeyboardEvent) => {
-      if (e.code === 'Enter' || e.code === 'Space') next();
-    };
-    const cleanup = () => {
-      window.removeEventListener('keydown', key);
-      $('prologue').removeEventListener('click', next);
-      p.classList.remove('on');
-      this.hide('prologue');
-    };
-    window.addEventListener('keydown', key);
-    $('prologue').addEventListener('click', next);
-    next();
-  }
-
   choice(set: ChoiceSet, tiers: Record<Affinity, number>, pick: (c: Choice) => void) {
     $('choice-act').textContent = set.act;
     $('choice-prompt').textContent = set.prompt;

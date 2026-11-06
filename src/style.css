@@ -50,10 +50,6 @@ input[type='range'] { accent-color: var(--accent); width: 60%; }
 .quote { margin-top: 30px; font-family: var(--serif); font-style: italic; color: #9fd6c4; font-size: clamp(13px, 1.8vw, 17px); line-height: 1.6; opacity: 0.85; }
 .title-foot { position: absolute; bottom: 14px; left: 0; right: 0; text-align: center; font-size: 11px; letter-spacing: 0.18em; color: var(--dim); opacity: 0.7; padding: 0 12px; }
 
-/* ---------- prologue ---------- */
-#prologue { flex-direction: column; background: #020708; cursor: pointer; }
-#prologue-text { font-family: var(--serif); font-style: italic; font-size: clamp(20px, 3.4vw, 38px); line-height: 1.5; max-width: 820px; text-align: center; color: #d6fff0; opacity: 0; transition: opacity 1.4s ease; text-shadow: 0 0 30px rgba(92,255,193,0.35); }
-#prologue-text.on { opacity: 1; }
 
 /* ---------- HUD ---------- */
 :root { --ui: 'Bahnschrift', 'DIN Alternate', 'Segoe UI', 'Roboto Condensed', 'Arial Narrow', system-ui, sans-serif; --gold: #ffc14a; }

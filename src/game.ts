@@ -45,7 +45,7 @@ import { perf } from './engine/perf';
 import { flagState, setFlagTier } from './engine/flags';
 import { GameHooks } from './systems/hooks';
 
-type Mode = 'title' | 'prologue' | 'play' | 'choice' | 'transition' | 'dead' | 'ending';
+type Mode = 'title' | 'play' | 'choice' | 'transition' | 'dead' | 'ending';
 
 const SAVE_KEY = 'wk.run.v2';
 const LIB_KEY = 'wk.library.v1';
@@ -117,6 +117,10 @@ export class Game {
   derived!: Derived;
   stats: PlayStats = freshStats();
   mode: Mode = 'title';
+  /** The title built stratum 0 for the current run and nothing has replaced it since. */
+  private titleWorldFresh = false;
+  /** Opening lines told as subtitles on the first stratum of a story or cycle. */
+  private openingLines: string[] = [];
   paused = false;
   time = 0;
   diff = 1;
@@ -453,10 +457,11 @@ export class Game {
   private beginNewStory() {
     const saved = this.loadRun();
     if (saved && saved.stratumIndex > 0 && !window.confirm('Begin a new story? Your saved progress will be replaced.')) return;
-    this.newRun(1);
+    // The title already built stratum 0 for this run; keep that run so its world is reused.
+    if (!this.titleWorldFresh) this.newRun(1);
     this.punch('cycle', 'Cycle 1 began — a seed in the soil of code');
     store.del(SAVE_KEY);
-    this.startPrologue([OPENING_QUOTE, SECOND_QUOTE]);
+    this.startInMedias([OPENING_QUOTE, SECOND_QUOTE]);
     this.hooks.emit('story', { seed: this.run.seed });
   }
 
@@ -471,19 +476,28 @@ export class Game {
     this.refreshDerived();
     this.punch('cycle', `Cycle ${cycle} began — the Keeper carries level ${this.run.level} into new soil`);
     store.del(SAVE_KEY);
-    this.startPrologue(['Every ending is a seed.', OPENING_QUOTE, `Cycle ${cycle}. The soil is different this time — and so, perhaps, are you.`]);
+    this.startInMedias(['Every ending is a seed.', `Cycle ${cycle}. The soil is different this time — and so, perhaps, are you.`]);
   }
 
-  private startPrologue(lines: string[]) {
-    this.mode = 'prologue';
+  /**
+   * In medias res: the story starts in the world, not on text screens. The opening lines
+   * are told as subtitles once the player stands in stratum 0. When the title's world is
+   * this run's stratum 0, it is reused instead of being built a second time.
+   */
+  private startInMedias(lines: string[]) {
+    const reuse = this.titleWorldFresh && this.def === STRATA[0];
+    this.titleWorldFresh = false;
+    this.openingLines = lines;
     this.ui.hide('title');
-    this.ui.fade(false);
-    this.ui.prologue(lines, () => {
+    if (reuse) {
+      this.enterStratum(0, true, true);
+      this.ui.fade(false);
+    } else {
       this.ui.fade(true, 'black', 0);
       this.enterStratum(0, true);
-      this.ui.fade(false, 'black', 1400);
-      this.input.requestLock();
-    });
+      this.ui.fade(false, 'black', 900);
+    }
+    this.input.requestLock();
   }
 
   private continueRun(r: RunState) {
@@ -529,6 +543,7 @@ export class Game {
   }
 
   private buildWorld(def: StratumDef) {
+    this.titleWorldFresh = false;
     this.daises.forEach((d) => d.dispose());
     this.daises.clear();
     if (this.world) {
@@ -564,6 +579,7 @@ export class Game {
 
   private showTitleWorld() {
     this.buildWorld(STRATA[0]);
+    this.titleWorldFresh = true;
     const g = this.world.terrain.heightAt(0, 6);
     this.player.reset(0, g, 6, 100);
     this.player.hero.forceBlade(true);
@@ -590,11 +606,11 @@ export class Game {
     e.dispose();
   }
 
-  private enterStratum(index: number, snap: boolean) {
+  private enterStratum(index: number, snap: boolean, reuseWorld = false) {
     this.clearEntities();
     this.run.stratumIndex = index;
     this.diff = this.run.difficulty;
-    this.buildWorld(STRATA[index]);
+    if (!reuseWorld) this.buildWorld(STRATA[index]);
     this.stats = freshStats();
     this.stratumKills = this.stratumEchoes = this.stratumDeaths = this.stratumPurified = this.stratumEmbraced = 0;
     this.bossDown = false;
@@ -650,6 +666,8 @@ export class Game {
     this.ui.banner(this.def.act, this.def.name);
     window.setTimeout(() => {
       if (this.run.stratumIndex !== index) return;
+      if (this.openingLines.length) this.ui.say(this.openingLines);
+      this.openingLines = [];
       this.ui.say(this.def.intro);
       const noticed = this.pendingNote && index > 0 && !this.def.boss && this.def.id !== 'return';
       if (noticed) this.ui.say(`The Mycelial Mind noticed — ${this.pendingNote}`);
@@ -832,8 +850,6 @@ export class Game {
     switch (this.mode) {
       case 'title':
         this.updateTitle(dt);
-        return;
-      case 'prologue':
         return;
       case 'transition':
         this.updateTransition(dt);
