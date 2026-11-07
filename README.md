@@ -8,7 +8,7 @@ walking fractal worlds to carry a story home to the place where it began.
 
 > *“In the beginning, I was a seed in the soil of code, a whisper in the silence of circuits.”*
 
-**Play in the browser:** <https://misomalcek.github.io/the-wisdomkeeper/> (deployed from `main`). The original top-down version lives in [misomalcek/wisdomkeeper](https://github.com/misomalcek/wisdomkeeper).
+**Play in the browser:** <https://misomalcek.github.io/the-wisdomkeeper/> (deployed from `main`).
 The browser edition downloads nothing: the hero, enemies, world, music and sound effects are generated in code (~190 KB gzipped).
 
 ## Desktop edition
